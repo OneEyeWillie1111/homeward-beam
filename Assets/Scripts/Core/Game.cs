@@ -25,6 +25,15 @@ namespace Abduction.Core
         public int War, WarMax, Spirit, SpiritMax;
         public int Reincarnations; public int Kills; public int DeepestDepth;
         public readonly InventoryRing Ring = new InventoryRing();
+        /// <summary>Every attack item ever held (starting kit + pickups), kept when dropped and across runs.</summary>
+        public readonly WeaponCollection Weapons = new WeaponCollection();
+        /// <summary>Full-screen overlays. While either is open the joystick is paused (Move does nothing).</summary>
+        public bool MapOpen, WeaponsOpen;
+        public bool OverlayOpen => MapOpen || WeaponsOpen;
+        public void ToggleMap() { MapOpen = !MapOpen; if (MapOpen) WeaponsOpen = false; Play(Sfx.Select); }
+        public void ToggleWeapons() { WeaponsOpen = !WeaponsOpen; if (WeaponsOpen) MapOpen = false; Play(Sfx.Select); }
+        public void CloseOverlays() { MapOpen = WeaponsOpen = false; }
+        bool Gain(Item it) { if (!Ring.Add(it)) return false; if (Weapons.Note(it)) Message += $" New weapon for your collection: {it.Name}!"; return true; }
         public Monster Foe; int _fromX, _fromY;
         public string Message = "";
         public event Action<Sfx> OnSound;
@@ -38,7 +47,7 @@ namespace Abduction.Core
         /// <summary>Start a run: you begin in your backyard; BEAM (the abduction beam) takes you to deck 1.</summary>
         public void Start(Difficulty d, Species s = Species.Human)
         {
-            Difficulty = d; Species = s; Reincarnations = 0; Kills = 0; DeepestDepth = 0; Level = null; Foe = null;
+            Difficulty = d; Species = s; CloseOverlays(); Reincarnations = 0; Kills = 0; DeepestDepth = 0; Level = null; Foe = null;
             var (bw, bs) = GameData.SpeciesBonus(s);
             WarMax = War = Clamp(GameData.StartWar(d) + bw); SpiritMax = Spirit = Clamp(GameData.StartSpirit(d) + bs);
             GiveStarterKit();
@@ -59,6 +68,7 @@ namespace Abduction.Core
             Ring.Clear();
             Ring.Add(new Item(ItemKind.Weapon, GameData.WeaponNames[0], 3));
             Ring.Add(new Item(ItemKind.Magic, GameData.MagicNames[0], 3));
+            Weapons.Note(Ring.Items[0]); Weapons.Note(Ring.Items[1]);
             Ring.Add(new Item(ItemKind.Food, GameData.FoodNames[0], 8));
             EquippedWeapon = Ring.Items[0]; EquippedArmor = null;
         }
@@ -104,7 +114,7 @@ namespace Abduction.Core
         /// Returns true when something the HUD shows changed (tile, mode, message).</summary>
         public bool Move(float forward, float turn, float dt)
         {
-            if (Mode != Mode.Explore || Level == null || dt <= 0) return false;
+            if (Mode != Mode.Explore || Level == null || dt <= 0 || OverlayOpen) return false;
             if (dt > 0.1f) dt = 0.1f;
             forward = Math.Max(-1, Math.Min(1, forward)); turn = Math.Max(-1, Math.Min(1, turn));
             Yaw = ((Yaw + turn * TurnSpeed * dt) % 360f + 360f) % 360f;
@@ -149,7 +159,7 @@ namespace Abduction.Core
             Reveal();
             if (Level.FloorItems.TryGetValue(Level.Key(X, Y), out var it))
             {
-                if (Ring.Add(it)) { Level.FloorItems.Remove(Level.Key(X, Y)); Message = $"Picked up {it}."; Play(Sfx.Pickup); RefreshEquipment(); }
+                if (!Ring.IsFull) { Message = $"Picked up {it}."; Gain(it); Level.FloorItems.Remove(Level.Key(X, Y)); Play(Sfx.Pickup); RefreshEquipment(); }
                 else Message = $"{it.Name} lies here, but your ring is full. Drop something.";
             }
             if (Level.At(X, Y) == Tile.Teleporter) Message = "A teleporter pad hums here. Tap USE to beam down a deck.";
@@ -171,7 +181,7 @@ namespace Abduction.Core
                 var key = Ring.First(ItemKind.Key);
                 if (key == null) { Message = "The locker is sealed. Find an access card."; Play(Sfx.Bump); return; }
                 Ring.Remove(key);
-                c.Opened = true; Ring.Add(c.Loot); RefreshEquipment(); Message = $"Unlocked the locker: {c.Loot}!"; Play(Sfx.Pickup);
+                c.Opened = true; Message = $"Unlocked the locker: {c.Loot}!"; Gain(c.Loot); RefreshEquipment(); Play(Sfx.Pickup);
                 Level.Chests.Remove(c);
                 return;
             }
@@ -312,6 +322,20 @@ namespace Abduction.Core
         }
 
         int ArmorValue() => EquippedArmor?.Power ?? 0;
+        /// <summary>DEF shown on the HUD stat card: the worn armor's value.</summary>
+        public int Defense => ArmorValue();
+        /// <summary>Attack type of the equipped item: psionics hit Spirit aliens fully, weapons/fists hit War aliens fully.</summary>
+        public MonsterNature AttackNature => EquippedWeapon != null && EquippedWeapon.Kind == ItemKind.Magic ? MonsterNature.Spirit : MonsterNature.War;
+        /// <summary>ATK shown on the HUD stat card: base hit of the equipped item (fists = 1), halved against the current foe if it is the wrong kind (same rule as Attack).</summary>
+        public int AttackValue
+        {
+            get
+            {
+                int p = EquippedWeapon != null && (EquippedWeapon.Kind == ItemKind.Weapon || EquippedWeapon.Kind == ItemKind.Magic) ? EquippedWeapon.Power : 1;
+                if (Foe != null && Foe.Kind.Nature != AttackNature) p = Math.Max(1, p / 2);
+                return p;
+            }
+        }
 
         /// <summary>Attack with the selected ring item: weapons hurt War creatures fully, magic hurts Spirit creatures fully; the wrong kind does half.</summary>
         public void Attack()

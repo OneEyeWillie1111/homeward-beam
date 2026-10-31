@@ -448,5 +448,140 @@ namespace Abduction
         static float Circle(Vector2 p, Vector2 c, float r) => (p - c).magnitude - r;
         static float Capsule(Vector2 p, Vector2 a, Vector2 b, float r) { var pa = p - a; var ba = b - a; float h = Mathf.Clamp01(Vector2.Dot(pa, ba) / Vector2.Dot(ba, ba)); return (pa - ba * h).magnitude - r; }
         static float RoundBox(Vector2 p, Vector2 b, float r) { var q = new Vector2(Mathf.Abs(p.x), Mathf.Abs(p.y)) - b + new Vector2(r, r); return new Vector2(Mathf.Max(q.x, 0), Mathf.Max(q.y, 0)).magnitude + Mathf.Min(Mathf.Max(q.x, q.y), 0) - r; }
-    }
+    
+        // ---------------- Wall decor atlas (4 x 2 cells of 256px, one per Core.DecorKind) ----------------
+        public const int DecorCols = 4, DecorRows = 2, DecorCell = 256;
+        /// <summary>UV rect of a decor kind's atlas cell.</summary>
+        public static Rect DecorUV(Abduction.Core.DecorKind k) { int i = (int)k; return new Rect((i % DecorCols) / (float)DecorCols, (i / DecorCols) / (float)DecorRows, 1f / DecorCols, 1f / DecorRows); }
+
+        static Texture2D _decorAlbedo, _decorEmission;
+        /// <summary>One shared material for every decor panel on a deck (single draw call); blink=true gives the pulsing copy.</summary>
+        public static Material DecorMaterial(bool blink)
+        {
+            if (_decorAlbedo == null) BuildDecorAtlas();
+            var m = Template("Glow"); m.color = Color.white; m.mainTexture = _decorAlbedo;
+            m.SetFloat("_Metallic", 0.35f); m.SetFloat("_Glossiness", 0.72f);
+            m.EnableKeyword("_EMISSION"); m.SetTexture("_EmissionMap", _decorEmission); m.SetColor("_EmissionColor", Color.white * (blink ? 1.6f : 1.25f));
+            m.globalIlluminationFlags = MaterialGlobalIlluminationFlags.EmissiveIsBlack; m.enableInstancing = true;
+            return m;
+        }
+
+        static void BuildDecorAtlas()
+        {
+            int W = DecorCols * DecorCell, H = DecorRows * DecorCell;
+            var a = new Color[W * H]; var e = new Color[W * H];
+            for (int k = 0; k < DecorCols * DecorRows; k++)
+            {
+                int ox = (k % DecorCols) * DecorCell, oy = (k / DecorCols) * DecorCell; var rnd = new System.Random(1000 + k * 77);
+                // Per-cell random glyph grid (alien script) shared by several kinds.
+                var glyph = new bool[16 * 16]; for (int g = 0; g < glyph.Length; g++) glyph[g] = rnd.NextDouble() < 0.45;
+                var stars = new List<Vector3>(); for (int st = 0; st < 70; st++) stars.Add(new Vector3((float)rnd.NextDouble(), (float)rnd.NextDouble(), (float)rnd.NextDouble()));
+                for (int py = 0; py < DecorCell; py++)
+                    for (int px = 0; px < DecorCell; px++)
+                    {
+                        float u = (px + 0.5f) / DecorCell, v = (py + 0.5f) / DecorCell;
+                        DecorPixel((Abduction.Core.DecorKind)k, u, v, glyph, stars, out var col, out var em);
+                        a[(oy + py) * W + ox + px] = col; e[(oy + py) * W + ox + px] = em;
+                    }
+            }
+            _decorAlbedo = new Texture2D(W, H, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear, anisoLevel = 4 };
+            _decorAlbedo.SetPixels(a); _decorAlbedo.Apply(true);
+            _decorEmission = new Texture2D(W, H, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Trilinear };
+            _decorEmission.SetPixels(e); _decorEmission.Apply(true);
+        }
+
+        static float Smooth(float edge, float d) => Mathf.Clamp01(0.5f - d / Mathf.Max(edge, 1e-4f));
+        /// <summary>Silver bevelled frame (0 inside, 1 on frame) for framed panels.</summary>
+        static float Frame(float u, float v, float w) { float d = Mathf.Min(Mathf.Min(u, 1 - u), Mathf.Min(v, 1 - v)); return d < w ? 1 : 0; }
+
+        static void DecorPixel(Abduction.Core.DecorKind k, float u, float v, bool[] glyph, List<Vector3> stars, out Color col, out Color em)
+        {
+            var silver = new Color(0.72f, 0.75f, 0.78f, 0.8f); em = Color.black;
+            float fr = Frame(u, v, 0.045f);
+            float cx = u - 0.5f, cy = v - 0.5f, r = Mathf.Sqrt(cx * cx + cy * cy), ang = Mathf.Atan2(cy, cx);
+            bool Glyph(float gu, float gv, int cells) { int gx = Mathf.Clamp((int)(gu * cells), 0, cells - 1), gy = Mathf.Clamp((int)(gv * cells), 0, cells - 1); float fu = gu * cells % 1, fv = gv * cells % 1; bool stroke = fu > 0.2f && fu < 0.8f && fv > 0.2f && fv < 0.8f && (fu < 0.38f || fv < 0.38f || fu > 0.62f || ((gx + gy) % 3 == 0 && fv > 0.62f)); return stroke && glyph[(gy % 16) * 16 + gx % 16]; }
+            switch (k)
+            {
+                case Abduction.Core.DecorKind.GlyphPanel:
+                {
+                    col = new Color(0.08f, 0.1f, 0.13f, 0.85f);
+                    if (fr > 0) { col = silver; break; }
+                    if (Glyph((u - 0.1f) / 0.8f, (v - 0.1f) / 0.8f, 6) && u > 0.1f && u < 0.9f && v > 0.1f && v < 0.9f) { col = new Color(0.3f, 0.9f, 1f, 0.9f); em = new Color(0.2f, 0.85f, 1f); }
+                    break;
+                }
+                case Abduction.Core.DecorKind.SerpentMural:
+                {
+                    // Banner of Ixmorrhan: deep crimson cloth, gold coiled serpent (Archimedean spiral) with an amber eye.
+                    col = Color.Lerp(new Color(0.28f, 0.03f, 0.08f, 0.3f), new Color(0.45f, 0.06f, 0.12f, 0.3f), v);
+                    if (fr > 0 || v < 0.06f) { col = new Color(0.8f, 0.62f, 0.25f, 0.85f); break; }
+                    float t = (ang + Mathf.PI) / (2 * Mathf.PI); float sp = r / 0.055f - t; float band = Mathf.Abs(sp - Mathf.Round(sp));
+                    if (r < 0.38f && r > 0.05f && band < 0.22f) { float scale = 0.85f + 0.15f * Mathf.Sin(ang * 18 + r * 90); col = new Color(0.85f * scale, 0.65f * scale, 0.22f, 0.85f); em = new Color(0.25f, 0.17f, 0.03f); }
+                    float hx = u - 0.5f, hy = v - 0.86f; if (hx * hx / 0.006f + hy * hy / 0.0025f < 1) { col = new Color(0.8f, 0.6f, 0.2f, 0.85f); if (Mathf.Abs(hx - 0.02f) < 0.008f && Mathf.Abs(hy) < 0.018f) { col = new Color(1f, 0.7f, 0.1f); em = new Color(1f, 0.55f, 0.05f) * 1.5f; } }
+                    break;
+                }
+                case Abduction.Core.DecorKind.HoloPoster:
+                {
+                    col = new Color(0.03f, 0.12f, 0.14f, 0.9f);
+                    if (fr > 0) { col = silver; break; }
+                    float scan = 0.85f + 0.15f * Mathf.Sin(v * 220);
+                    // Big triangle emblem + lines of alien script below.
+                    bool tri = v > 0.5f && v < 0.88f && Mathf.Abs(cx) < (0.88f - v) * 0.55f && !(v > 0.58f && Mathf.Abs(cx) < (0.8f - v) * 0.4f);
+                    bool script = v > 0.12f && v < 0.44f && u > 0.12f && u < 0.88f && ((int)((v - 0.12f) * 25)) % 2 == 0 && Glyph(u * 3.5f % 1, (v * 25) % 1, 12);
+                    if (tri || script) { col = new Color(0.4f, 1f, 0.9f, 0.9f); em = new Color(0.2f, 0.9f, 0.8f) * scan; }
+                    else em = new Color(0.01f, 0.05f, 0.05f) * scan;
+                    break;
+                }
+                case Abduction.Core.DecorKind.StarChart:
+                {
+                    col = new Color(0.02f, 0.03f, 0.08f, 0.9f);
+                    if (fr > 0) { col = silver; break; }
+                    foreach (var s in stars) { float dx = u - s.x, dy = v - s.y; float d2 = dx * dx + dy * dy; float rr = 0.0025f + s.z * 0.004f; if (d2 < rr * rr) { col = Color.white; em = new Color(0.8f, 0.9f, 1f) * (0.6f + s.z); } }
+                    foreach (float orb in new[] { 0.14f, 0.24f, 0.34f }) if (Mathf.Abs(r - orb) < 0.003f) { col = new Color(0.3f, 0.5f, 1f); em = new Color(0.15f, 0.3f, 0.9f); }
+                    if (r < 0.04f) { col = new Color(1f, 0.8f, 0.4f); em = new Color(1f, 0.7f, 0.3f) * 1.5f; }
+                    break;
+                }
+                case Abduction.Core.DecorKind.SpecimenTank:
+                {
+                    // Round-topped window into a green tank with a floating silhouette and bubbles.
+                    col = new Color(0.55f, 0.58f, 0.6f, 0.7f);
+                    float wx = Mathf.Abs(cx) / 0.36f, wy = (v - 0.08f) / 0.84f; bool inside = wy > 0 && wy < 1 && (wx < 1) && (wy < 0.8f || wx * wx + ((wy - 0.8f) / 0.2f) * ((wy - 0.8f) / 0.2f) < 1);
+                    if (!inside) { if (Mathf.Abs(wx - 1) < 0.08f && wy > 0 && wy < 1) col = new Color(0.85f, 0.88f, 0.9f, 0.9f); break; }
+                    var liquid = Color.Lerp(new Color(0.05f, 0.35f, 0.2f), new Color(0.2f, 0.75f, 0.45f), wy);
+                    col = liquid; col.a = 0.95f; em = liquid * 0.8f;
+                    float bx = cx / 0.12f, by = (v - 0.62f) / 0.1f, body = cx / 0.09f, bby = (v - 0.36f) / 0.2f;
+                    if (bx * bx + by * by < 1 || body * body + bby * bby < 1) { col = new Color(0.04f, 0.1f, 0.07f, 0.6f); em = new Color(0.02f, 0.08f, 0.04f); }
+                    if (Mathf.Abs(cx - 0.035f) < 0.018f && Mathf.Abs(v - 0.63f) < 0.012f || Mathf.Abs(cx + 0.035f) < 0.018f && Mathf.Abs(v - 0.63f) < 0.012f) { col = Color.black; em = Color.black; }
+                    float bub = Mathf.Abs(Mathf.Sin(u * 61) * Mathf.Sin(v * 43 + u * 7)); if (bub > 0.985f) { col = new Color(0.8f, 1f, 0.9f); em = new Color(0.5f, 1f, 0.7f); }
+                    break;
+                }
+                case Abduction.Core.DecorKind.VentGrille:
+                {
+                    col = new Color(0.25f, 0.27f, 0.3f, 0.75f);
+                    if (fr > 0) { col = silver; break; }
+                    float slat = (v * 14) % 1; col = slat < 0.55f ? new Color(0.05f, 0.05f, 0.06f, 0.2f) : Color.Lerp(new Color(0.6f, 0.62f, 0.66f, 0.8f), new Color(0.35f, 0.37f, 0.4f, 0.6f), (slat - 0.55f) / 0.45f);
+                    if (v < 0.1f && Mathf.Abs(cx) < 0.12f) { col = new Color(1f, 0.3f, 0.2f); em = new Color(0.9f, 0.15f, 0.08f); }
+                    break;
+                }
+                case Abduction.Core.DecorKind.ConduitPipes:
+                {
+                    col = new Color(0f, 0f, 0f, 0f);   // transparent-ish background: the wall shows as dark recess
+                    col = new Color(0.12f, 0.13f, 0.15f, 0.4f);
+                    foreach (float px0 in new[] { 0.18f, 0.42f, 0.66f, 0.84f })
+                    {
+                        float pw = px0 == 0.42f ? 0.11f : 0.07f; float d = Mathf.Abs(u - px0) / pw;
+                        if (d < 1) { float shade = Mathf.Sqrt(1 - d * d); col = new Color(0.45f + 0.4f * shade, 0.47f + 0.4f * shade, 0.5f + 0.4f * shade, 0.85f); if ((v * 6 + px0 * 3) % 1 < 0.06f) { col = new Color(1f, 0.55f, 0.15f); em = new Color(1f, 0.45f, 0.1f) * shade; } }
+                    }
+                    break;
+                }
+                default: // RecessedPanel
+                {
+                    float inset = Frame(u, v, 0.08f), inner = Frame(u, v, 0.12f);
+                    col = inset > 0 ? new Color(0.78f, 0.8f, 0.83f, 0.85f) : inner > 0 ? new Color(0.2f, 0.21f, 0.23f, 0.6f) : new Color(0.5f, 0.52f, 0.55f, 0.75f);
+                    if (inner == 0 && Mathf.Abs(u - 0.5f) < 0.012f) { col = new Color(0.6f, 0.9f, 1f); em = new Color(0.4f, 0.85f, 1f); }
+                    if (inner == 0 && Mathf.Abs(v - 0.5f) < 0.006f) col = new Color(0.25f, 0.27f, 0.3f, 0.5f);
+                    break;
+                }
+            }
+        }
+}
 }

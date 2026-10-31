@@ -26,6 +26,16 @@ namespace Abduction
         RawImage _map; Texture2D _mapTex; Color32[] _mapBuf;
         readonly Dictionary<ActionButton, RectTransform> _actBtns = new Dictionary<ActionButton, RectTransform>();
         Text _useLabel, _altLabel; RawImage _hubIcon;
+        // MAP / WEAPONS overlays
+        RectTransform _mapBtn, _wpnBtn, _overlayRoot, _overlayPanel, _overlayClose, _bigMapRect, _wpnScrollRect;
+        Text _overlayTitle, _overlayFoot; RawImage _bigMap; Texture2D _bigMapTex; Color32[] _bigMapBuf;
+        readonly List<(RawImage icon, Text name, Text info, Image bg)> _wpnRows = new List<(RawImage, Text, Text, Image)>();
+        string _savedWeapons; const string WeaponsPrefKey = "abduction.weapons.v1";
+        const int BigMapCells = 13, BigMapPx = 40;
+        // Readability: every label is registered with its base size so the Large Text setting can rescale them all.
+        readonly List<(Text t, int baseSize)> _texts = new List<(Text, int)>();
+        const string LargeTextPrefKey = "abduction.largetext.v1"; Text _largeBtnLabel;
+        RawImage _statIcon; Text _statName, _statAtk, _statDef;
         // Floating joystick state (screen pixels). NoFinger = idle; MouseFinger = editor/desktop mouse.
         const int NoFinger = -100, MouseFinger = -1;
         int _joyId = NoFinger; Vector2 _joyOrigin, _joyPos; Region _joyZone; float _joyR = 140;
@@ -80,7 +90,13 @@ namespace Abduction
             _world = new GameObject("World").AddComponent<World3D>(); _world.Init(_cam);
             _mapTex = new Texture2D(MapCells * MapPx, MapCells * MapPx, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
             _mapBuf = new Color32[MapCells * MapPx * MapCells * MapPx];
+            UiLayout.TextScale = PlayerPrefs.GetInt(LargeTextPrefKey, 0) == 1 ? UiLayout.LargeScale : 1f;
+            _game.Weapons.Load(_savedWeapons = PlayerPrefs.GetString(WeaponsPrefKey, ""));
+            _bigMapTex = new Texture2D(BigMapCells * BigMapPx, BigMapCells * BigMapPx, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
+            _bigMapBuf = new Color32[BigMapCells * BigMapPx * BigMapCells * BigMapPx];
             BuildUi();
+            for (int i = 0; i < _texts.Count; i++) _texts[i] = (_texts[i].t, _texts[i].t.resizeTextMaxSize);   // snapshot final base sizes
+            ApplyTextScale();
             Refresh();
         }
 
@@ -98,12 +114,13 @@ namespace Abduction
 
             // ---- Full-screen view overlays (positions set in Layout from UiLayout): deck info, help, prompt, foe bar, corner map, corner ring ----
             _viewRect = Container(_root, "View"); Stretch(_viewRect);
-            _deckText = Label(_viewRect, "Deck", 26, TextAnchor.MiddleLeft, Vector2.zero, Vector2.one); _deckText.color = new Color(1, 1, 1, 0.9f);
+            var deckPlate = Card(_viewRect, "DeckPlate", new Color(0.02f, 0.04f, 0.07f, 0.75f), 18, false); deckPlate.GetComponent<Image>().raycastTarget = false;
+            _deckText = Label(deckPlate, "Deck", 26, TextAnchor.MiddleCenter, Vector2.zero, Vector2.one); _deckText.color = Color.white;
             var help = MakeButton(_viewRect, "HELP", () => ShowHelp(true), 0, 0, 1, 1, new Color(0.12f, 0.4f, 0.55f, 0.85f));
             _helpBtnRect = (RectTransform)help.transform;
             _promptRect = Card(_viewRect, "Prompt", new Color(0.03f, 0.08f, 0.12f, 0.7f), 22, false);
             _promptRect.GetComponent<Image>().raycastTarget = false;
-            _promptText = Label(_promptRect, "Text", 26, TextAnchor.MiddleCenter, Vector2.zero, Vector2.one); _promptText.color = new Color(0.8f, 0.97f, 1f);
+            _promptText = Label(_promptRect, "Text", 26, TextAnchor.MiddleCenter, Vector2.zero, Vector2.one); _promptText.color = new Color(0.95f, 1f, 1f);
             _foeBar = Container(_viewRect, "FoeBar");
             _foeFill = Bar(_foeBar, new Color(1f, 0.3f, 0.3f), out _foeText);
             _mapRect = Card(_viewRect, "Map", new Color(0.02f, 0.04f, 0.07f, 0.8f), 20, true);
@@ -113,14 +130,26 @@ namespace Abduction
 
             // ---- HUD (top band): War/Spirit bars, held item, message ----
             _hudRect = Card(_root, "Hud", new Color(0.07f, 0.1f, 0.15f, 0.78f), 26);
-            var warRow = Container(_hudRect, "War"); Set(warRow, new Vector2(0.02f, 0.58f), new Vector2(0.49f, 0.94f));
+            var warRow = Container(_hudRect, "War"); Set(warRow, new Vector2(0.02f, 0.75f), new Vector2(0.49f, 0.97f));
             _warFill = Bar(warRow, new Color(1f, 0.42f, 0.3f), out _warText);
-            var spRow = Container(_hudRect, "Spirit"); Set(spRow, new Vector2(0.51f, 0.58f), new Vector2(0.98f, 0.94f));
+            var spRow = Container(_hudRect, "Spirit"); Set(spRow, new Vector2(0.51f, 0.75f), new Vector2(0.98f, 0.97f));
             _spiritFill = Bar(spRow, new Color(0.45f, 0.6f, 1f), out _spiritText);
-            _heldText = Label(_hudRect, "Held", 24, TextAnchor.MiddleLeft, new Vector2(0, 0.3f), new Vector2(1, 0.58f)); _heldText.color = HeldCol;
-            _msg = Label(_hudRect, "Msg", 24, TextAnchor.MiddleLeft, new Vector2(0, 0.02f), new Vector2(1, 0.32f)); _msg.color = new Color(0.75f, 0.95f, 1f);
+            // Stat card: equipped weapon icon + name, big ATK and DEF numbers (live).
+            var stat = Card(_hudRect, "StatCard", new Color(0.02f, 0.03f, 0.05f, 0.85f), 18, false); Set(stat, new Vector2(0.02f, 0.4f), new Vector2(0.98f, 0.72f));
+            stat.GetComponent<Image>().raycastTarget = false;
+            _statIcon = new GameObject("WeaponIcon", typeof(RectTransform)).AddComponent<RawImage>(); _statIcon.transform.SetParent(stat, false); _statIcon.raycastTarget = false;
+            Set(_statIcon.rectTransform, new Vector2(0.01f, 0.06f), new Vector2(0.11f, 0.94f));
+            _statName = Label(stat, "WeaponName", 28, TextAnchor.MiddleLeft, new Vector2(0.11f, 0), new Vector2(0.54f, 1)); _statName.color = new Color(1f, 0.85f, 0.8f);
+            _statAtk = Label(stat, "ATK", 40, TextAnchor.MiddleCenter, new Vector2(0.54f, 0), new Vector2(0.78f, 1)); _statAtk.color = new Color(1f, 0.55f, 0.45f);
+            _statDef = Label(stat, "DEF", 40, TextAnchor.MiddleCenter, new Vector2(0.78f, 0), new Vector2(1f, 1)); _statDef.color = new Color(0.6f, 0.8f, 1f);
+            _heldText = Label(_hudRect, "Held", 24, TextAnchor.MiddleLeft, new Vector2(0, 0.2f), new Vector2(1, 0.4f)); _heldText.color = new Color(1f, 0.85f, 0.4f);
+            _msg = Label(_hudRect, "Msg", 24, TextAnchor.MiddleLeft, new Vector2(0, 0.0f), new Vector2(1, 0.21f)); _msg.color = new Color(0.92f, 0.99f, 1f);
 
             BuildControls();
+            // Tapping the corner minimap opens the big map too.
+            var mapTap = _mapRect.gameObject.AddComponent<Button>(); mapTap.targetGraphic = _mapRect.GetComponent<Image>(); _mapRect.GetComponent<Image>().raycastTarget = true;
+            mapTap.onClick.AddListener(() => { if (_game.Level != null) { _game.ToggleMap(); Refresh(); } });
+            BuildOverlays();
 
             BuildTitle();
             BuildHelp();
@@ -141,6 +170,74 @@ namespace Abduction
             _actBtns[ActionButton.Use] = RoundButton("USE", () => _game.UseAction(), new Color(0.15f, 0.65f, 0.8f, 0.5f), out _useLabel);
             _actBtns[ActionButton.Scan] = RoundButton("SCAN", () => _game.Scan(), new Color(0.35f, 0.5f, 1f, 0.45f), out _);
             _actBtns[ActionButton.Alt] = RoundButton("DROP", () => { if (_game.Mode == Mode.Combat) _game.Flee(); else _game.DropCurrent(); }, new Color(0.35f, 0.4f, 0.5f, 0.45f), out _altLabel);
+        }
+
+        // ---- MAP (zoomed map centred on you) and WEAPONS (collection) overlays ----
+        void BuildOverlays()
+        {
+            _mapBtn = RoundButton("MAP", () => { if (_game.Level != null) _game.ToggleMap(); }, new Color(0.2f, 0.75f, 0.65f, 0.5f), out var ml); ml.fontSize = 22; ml.resizeTextMaxSize = 22;
+            _wpnBtn = RoundButton("ARMS", () => _game.ToggleWeapons(), new Color(0.85f, 0.55f, 0.2f, 0.5f), out var wl); wl.fontSize = 22; wl.resizeTextMaxSize = 22;
+            wl.text = "WEAP\nONS"; wl.lineSpacing = 0.8f;
+            _overlayRoot = Container(_root, "Overlay"); Stretch(_overlayRoot);
+            var dim = new GameObject("TapOutside", typeof(RectTransform)).AddComponent<Image>(); dim.transform.SetParent(_overlayRoot, false); Stretch(dim.rectTransform);
+            dim.color = new Color(0, 0, 0, 0.55f); var dimBtn = dim.gameObject.AddComponent<Button>(); dimBtn.transition = Selectable.Transition.None;
+            dimBtn.onClick.AddListener(() => { _game.CloseOverlays(); Refresh(); });   // sibling of the panel, so taps on the panel never reach it
+            _overlayPanel = Card(_overlayRoot, "Panel", new Color(0.05f, 0.09f, 0.14f, 0.96f), 34);
+            _overlayTitle = Label(_overlayPanel, "Title", 36, TextAnchor.MiddleLeft, new Vector2(0.03f, 0.9f), new Vector2(0.8f, 0.99f)); _overlayTitle.color = Accent;
+            _overlayFoot = Label(_overlayPanel, "Foot", 22, TextAnchor.MiddleCenter, new Vector2(0.03f, 0.01f), new Vector2(0.97f, 0.08f)); _overlayFoot.color = new Color(0.75f, 0.9f, 1f, 0.85f);
+            var close = MakeButton(_overlayRoot, "X", () => _game.CloseOverlays(), 0, 0, 1, 1, new Color(0.7f, 0.2f, 0.25f, 0.9f)); _overlayClose = (RectTransform)close.transform;
+            // Big map: square, centred in the panel.
+            _bigMapRect = Container(_overlayPanel, "BigMap"); Set(_bigMapRect, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f));
+            _bigMap = _bigMapRect.gameObject.AddComponent<RawImage>(); _bigMap.texture = _bigMapTex; _bigMap.raycastTarget = false;
+            // Weapons list: vertical scroll view.
+            _wpnScrollRect = Container(_overlayPanel, "WeaponsScroll"); Set(_wpnScrollRect, new Vector2(0.03f, 0.09f), new Vector2(0.97f, 0.89f));
+            var vpImg = _wpnScrollRect.gameObject.AddComponent<Image>(); vpImg.color = new Color(0, 0, 0, 0.01f);
+            _wpnScrollRect.gameObject.AddComponent<RectMask2D>();
+            var content = Container(_wpnScrollRect, "Content"); content.anchorMin = new Vector2(0, 1); content.anchorMax = new Vector2(1, 1); content.pivot = new Vector2(0.5f, 1); content.offsetMin = content.offsetMax = Vector2.zero;
+            var vlg = content.gameObject.AddComponent<VerticalLayoutGroup>(); vlg.spacing = 10; vlg.childForceExpandHeight = false; vlg.childControlHeight = true; vlg.childControlWidth = true; vlg.padding = new RectOffset(4, 4, 4, 4);
+            content.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            var sr = _wpnScrollRect.gameObject.AddComponent<ScrollRect>(); sr.content = content; sr.viewport = _wpnScrollRect; sr.horizontal = false; sr.movementType = ScrollRect.MovementType.Clamped; sr.scrollSensitivity = 30;
+            foreach (var e in WeaponCollection.All)
+            {
+                var row = Card(content, "Row_" + e.Name, new Color(0.1f, 0.15f, 0.22f, 0.9f), 22, false);
+                row.gameObject.AddComponent<LayoutElement>().preferredHeight = 130;
+                var icon = new GameObject("Icon", typeof(RectTransform)).AddComponent<RawImage>(); icon.transform.SetParent(row, false); icon.raycastTarget = false;
+                var ir = icon.rectTransform; ir.anchorMin = new Vector2(0, 0.5f); ir.anchorMax = new Vector2(0, 0.5f); ir.pivot = new Vector2(0, 0.5f); ir.sizeDelta = new Vector2(104, 104); ir.anchoredPosition = new Vector2(14, 0);
+                var name = Label(row, "Name", 32, TextAnchor.MiddleLeft, new Vector2(0, 0.5f), new Vector2(1, 1)); ((RectTransform)name.transform).offsetMin = new Vector2(134, 0);
+                var info = Label(row, "Info", 24, TextAnchor.MiddleLeft, new Vector2(0, 0), new Vector2(1, 0.5f)); ((RectTransform)info.transform).offsetMin = new Vector2(134, 0);
+                _wpnRows.Add((icon, name, info, row.GetComponent<Image>()));
+            }
+        }
+
+        void RefreshOverlays()
+        {
+            var g = _game; bool on = g.OverlayOpen;
+            _overlayRoot.gameObject.SetActive(on); if (!on) return;
+            _overlayRoot.SetAsLastSibling(); _flash.transform.SetAsLastSibling();
+            _bigMapRect.gameObject.SetActive(g.MapOpen); _wpnScrollRect.gameObject.SetActive(g.WeaponsOpen);
+            if (g.MapOpen)
+            {
+                if (g.Level == null) { g.CloseOverlays(); _overlayRoot.gameObject.SetActive(false); return; }
+                _overlayTitle.text = $"<b>DECK {g.Depth} MAP</b>";
+                _overlayFoot.text = "You = white arrow  |  cyan = teleporter  |  gold = machine home  |  red = aliens";
+                var px = MiniMap.Render(g, BigMapCells, BigMapPx); int n = BigMapCells * BigMapPx;
+                for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) { uint c = px[y * n + x]; _bigMapBuf[(n - 1 - y) * n + x] = new Color32((byte)(c >> 16), (byte)(c >> 8), (byte)c, (byte)(c >> 24)); }
+                _bigMapTex.SetPixels32(_bigMapBuf); _bigMapTex.Apply(false);
+            }
+            else
+            {
+                _overlayTitle.text = $"<b>{g.Weapons.Header}</b>";
+                _overlayFoot.text = "Weapons and psionics you have ever held. Drag to scroll.";
+                for (int i = 0; i < _wpnRows.Count; i++)
+                {
+                    var e = WeaponCollection.All[i]; var (icon, name, info, bg) = _wpnRows[i]; bool has = g.Weapons.Has(e.Name);
+                    icon.texture = _icons[e.Kind]; icon.color = has ? Color.white : new Color(0.2f, 0.22f, 0.25f, 0.9f);   // grey silhouette when missing
+                    string kind = e.Kind == ItemKind.Weapon ? "Weapon (hurts War aliens)" : "Psionic (hurts Spirit aliens)";
+                    name.text = has ? $"<b>{e.Name}</b>" : e.Name; name.color = has ? (e.Kind == ItemKind.Weapon ? WeaponCol : new Color(0.6f, 0.75f, 1f)) : new Color(1, 1, 1, 0.3f);
+                    info.text = has ? $"{kind}  |  Power +{g.Weapons.Best(e.Name)}" : $"{kind}  |  not found yet"; info.color = has ? Color.white : new Color(1, 1, 1, 0.3f);
+                    bg.color = has ? new Color(0.1f, 0.15f, 0.22f, 0.9f) : new Color(0.06f, 0.08f, 0.11f, 0.6f);
+                }
+            }
         }
 
         RectTransform RoundButton(string label, System.Action act, Color c, out Text text)
@@ -207,9 +304,11 @@ namespace Abduction
             _helpGroup = _helpPanel.gameObject.AddComponent<CanvasGroup>();
             var dim = new GameObject("Dim", typeof(RectTransform)).AddComponent<Image>(); dim.transform.SetParent(_helpPanel, false); Stretch((RectTransform)dim.transform); dim.color = new Color(0, 0, 0, 0.6f);
             var card = Card(_helpPanel, "Card", new Color(0.08f, 0.12f, 0.18f, 0.98f), 30); Set(card, new Vector2(0.06f, 0.08f), new Vector2(0.94f, 0.92f));
-            _helpTitle = Label(card, "Title", 44, TextAnchor.MiddleLeft, new Vector2(0.02f, 0.85f), new Vector2(0.75f, 0.98f)); _helpTitle.color = Accent;
-            _helpPageNo = Label(card, "Page", 26, TextAnchor.MiddleRight, new Vector2(0.6f, 0.85f), new Vector2(0.98f, 0.98f));
-            _helpBody = Label(card, "Body", 30, TextAnchor.UpperLeft, new Vector2(0.02f, 0.18f), new Vector2(0.98f, 0.84f)); _helpBody.resizeTextMinSize = 16;
+            _helpTitle = Label(card, "Title", 44, TextAnchor.MiddleLeft, new Vector2(0.02f, 0.85f), new Vector2(0.52f, 0.98f)); _helpTitle.color = Accent;
+            _helpPageNo = Label(card, "Page", 22, TextAnchor.MiddleRight, new Vector2(0.6f, 0.155f), new Vector2(0.98f, 0.2f));
+            var large = MakeButton(card, "LARGE TEXT", ToggleLargeText, 0, 0, 1, 1, new Color(0.25f, 0.3f, 0.4f, 0.95f));
+            Set((RectTransform)large.transform, new Vector2(0.54f, 0.86f), new Vector2(0.98f, 0.98f)); _largeBtnLabel = large.GetComponentInChildren<Text>();
+            _helpBody = Label(card, "Body", 30, TextAnchor.UpperLeft, new Vector2(0.02f, 0.2f), new Vector2(0.98f, 0.84f)); _helpBody.resizeTextMinSize = 16;
             var prev = MakeButton(card, "< PREV", () => { _helpPage = (_helpPage + HelpPages.Pages.Length - 1) % HelpPages.Pages.Length; RefreshHelp(); }, 0, 0, 1, 1, ButtonCol);
             Set((RectTransform)prev.transform, new Vector2(0.03f, 0.03f), new Vector2(0.33f, 0.15f));
             var close = MakeButton(card, "CLOSE", () => ShowHelp(false), 0, 0, 1, 1, new Color(0.1f, 0.5f, 0.65f));
@@ -218,6 +317,24 @@ namespace Abduction
             Set((RectTransform)next.transform, new Vector2(0.67f, 0.03f), new Vector2(0.97f, 0.15f));
             ShowHelp(false); _helpGroup.alpha = 0;
         }
+        /// <summary>Settings: Large Text (persisted). Rescales every label (best-fit keeps them inside their boxes) and re-runs the layout.</summary>
+        void ToggleLargeText()
+        {
+            bool large = UiLayout.TextScale <= 1f; UiLayout.TextScale = large ? UiLayout.LargeScale : 1f;
+            PlayerPrefs.SetInt(LargeTextPrefKey, large ? 1 : 0); PlayerPrefs.Save();
+            ApplyTextScale(); Layout();
+        }
+        void ApplyTextScale()
+        {
+            float k = UiLayout.BaseTextBoost * UiLayout.TextScale;
+            foreach (var (t, b) in _texts)
+            {
+                int max = Mathf.RoundToInt(b * k);
+                t.fontSize = max; t.resizeTextMaxSize = max; t.resizeTextMinSize = Mathf.Min(max, Mathf.Max(12, Mathf.RoundToInt(b * 0.6f * UiLayout.TextScale)));
+            }
+            if (_largeBtnLabel) _largeBtnLabel.text = UiLayout.TextScale > 1f ? "LARGE TEXT: ON" : "LARGE TEXT: OFF";
+        }
+
         void ShowHelp(bool on) { _helpPanel.gameObject.SetActive(true); _helpGroup.blocksRaycasts = on; _helpGroup.interactable = on; _helpOn = on; if (on) RefreshHelp(); }
         bool _helpOn;
         void RefreshHelp() { var (t, b) = HelpPages.Pages[_helpPage]; _helpTitle.text = $"<b>{t}</b>"; _helpBody.text = b; _helpPageNo.text = $"{_helpPage + 1} / {HelpPages.Pages.Length}"; }
@@ -254,8 +371,8 @@ namespace Abduction
                 eq.sprite = ProcGen.RingSprite(0.07f); eq.raycastTarget = false; var er = (RectTransform)eq.transform; er.anchorMin = Vector2.zero; er.anchorMax = Vector2.one; er.offsetMin = new Vector2(-7, -7); er.offsetMax = new Vector2(7, 7);
                 _slotEquip[i] = eq;
                 var ic = new GameObject("Icon", typeof(RectTransform)).AddComponent<RawImage>(); ic.transform.SetParent(r, false);
-                Set((RectTransform)ic.transform, new Vector2(0.2f, 0.32f), new Vector2(0.8f, 0.92f)); ic.raycastTarget = false; _slotIcon[i] = ic;
-                _slotText[i] = Label(r, "Name", 16, TextAnchor.MiddleCenter, new Vector2(0.05f, 0.04f), new Vector2(0.95f, 0.34f));
+                Set((RectTransform)ic.transform, new Vector2(0.22f, 0.36f), new Vector2(0.78f, 0.92f)); ic.raycastTarget = false; _slotIcon[i] = ic;
+                _slotText[i] = Label(r, "Name", 21, TextAnchor.MiddleCenter, new Vector2(-0.05f, 0.0f), new Vector2(1.05f, 0.38f));
                 var tr = (RectTransform)_slotText[i].transform; tr.offsetMin = tr.offsetMax = Vector2.zero;
             }
         }
@@ -274,9 +391,11 @@ namespace Abduction
                 _slotBg[i].transform.localScale = Vector3.one * (sel ? 1.08f : 1f);
             }
             var cur = r.Current; _hubIcon.enabled = cur != null; if (cur != null) _hubIcon.texture = _icons[cur.Kind];
-            string w = g.EquippedWeapon != null ? $"<color=#ff6a5a>Weapon: {g.EquippedWeapon}</color>" : "<color=#ff6a5a>Weapon: fists</color>";
-            string a = g.EquippedArmor != null ? $"<color=#6aa0ff>Armor: {g.EquippedArmor}</color>" : "<color=#6aa0ff>Armor: none</color>";
-            _heldText.text = $"Holding: {(cur == null ? "nothing" : cur.ToString())}    {w}    {a}";
+            _heldText.text = $"Holding: {(cur == null ? "nothing" : cur.ToString())}";
+            var ew = g.EquippedWeapon; _statIcon.enabled = ew != null; if (ew != null) _statIcon.texture = _icons[ew.Kind];
+            _statName.text = ew != null ? $"{ew.Name}\n<size={Mathf.RoundToInt(20 * UiLayout.BaseTextBoost * UiLayout.TextScale)}>{(ew.Kind == ItemKind.Magic ? "Psionic: hits SPIRIT" : "Weapon: hits WAR")}</size>" : "Fists";
+            _statAtk.text = $"<size={Mathf.RoundToInt(18 * UiLayout.BaseTextBoost * UiLayout.TextScale)}>ATK</size> {g.AttackValue}";
+            _statDef.text = $"<size={Mathf.RoundToInt(18 * UiLayout.BaseTextBoost * UiLayout.TextScale)}>DEF</size> {g.Defense}";
         }
         static string Short(string n) { int sp = n.LastIndexOf(' '); return sp > 0 ? n.Substring(sp + 1) : n; }
 
@@ -309,9 +428,12 @@ namespace Abduction
         Text Label(RectTransform parent, string name, int size, TextAnchor a, Vector2 min, Vector2 max)
         {
             var go = new GameObject(name, typeof(RectTransform)); go.transform.SetParent(parent, false);
-            var t = go.AddComponent<Text>(); t.font = _font; t.fontSize = size; t.alignment = a; t.color = Color.white; t.supportRichText = true;
+            var t = go.AddComponent<Text>(); t.font = _font; t.fontSize = size; t.alignment = a; t.color = Color.white; t.supportRichText = true; t.fontStyle = FontStyle.Bold;
             t.resizeTextForBestFit = true; t.resizeTextMinSize = 12; t.resizeTextMaxSize = size; t.raycastTarget = false;
-            var sh = go.AddComponent<Shadow>(); sh.effectColor = new Color(0, 0, 0, 0.45f); sh.effectDistance = new Vector2(1.5f, -2f);
+            t.horizontalOverflow = HorizontalWrapMode.Wrap; t.verticalOverflow = VerticalWrapMode.Truncate;
+            var ol = go.AddComponent<Outline>(); ol.effectColor = new Color(0, 0, 0, 0.7f); ol.effectDistance = new Vector2(1.2f, -1.2f);
+            var sh = go.AddComponent<Shadow>(); sh.effectColor = new Color(0, 0, 0, 0.5f); sh.effectDistance = new Vector2(1.5f, -2.5f);
+            _texts.Add((t, size));
             var r = (RectTransform)go.transform; r.anchorMin = min; r.anchorMax = max; r.offsetMin = new Vector2(16, 4); r.offsetMax = new Vector2(-16, -4);
             return t;
         }
@@ -338,9 +460,12 @@ namespace Abduction
             float w = Mathf.Max(1, sa.width), h = Mathf.Max(1, sa.height);
             _cam.rect = new Rect(0, 0, 1, 1);
             Apply(_hudRect, UiLayout.Hud(w, h), 0); Apply(_mapRect, UiLayout.Map(w, h), 0); Apply(_ringSquare, UiLayout.Ring(w, h), 0);
-            Apply(_helpBtnRect, UiLayout.HelpButton(w, h), 0); Apply((RectTransform)_deckText.transform, UiLayout.DeckText(w, h), 0);
+            Apply(_helpBtnRect, UiLayout.HelpButton(w, h), 0); Apply((RectTransform)_deckText.transform.parent, UiLayout.DeckText(w, h), 0);
             Apply(_promptRect, UiLayout.Prompt(w, h), 0); Apply(_foeBar, UiLayout.FoeBar(w, h), 0);
             foreach (var kv in _actBtns) Apply(kv.Value, UiLayout.Button(kv.Key, w, h), 0);
+            Apply(_mapBtn, UiLayout.MapButton(w, h), 0); Apply(_wpnBtn, UiLayout.WeaponsButton(w, h), 0);
+            Apply(_overlayPanel, UiLayout.Overlay(w, h), 0); Apply(_overlayClose, UiLayout.OverlayClose(w, h), 0);
+            { var o = UiLayout.Overlay(w, h); float side = Mathf.Min(o.W * w * 0.94f, o.H * h * 0.78f) / (_canvas.scaleFactor > 0 ? _canvas.scaleFactor : 1); _bigMapRect.sizeDelta = new Vector2(side, side); }
             var hd = UiLayout.Head(w, h);
             _world.HeadVX = (sa.xMin + hd.Cx * w) / sw; _world.HeadVY = (sa.yMin + hd.Cy * h) / sh; _world.HeadVH = hd.H * h / sh;
             _joyZone = UiLayout.JoystickZone(w, h); _joyR = UiLayout.JoystickRadiusPx(w, h);
@@ -398,7 +523,7 @@ namespace Abduction
         void Update()
         {
             if (_lastScreen.x != Screen.width || _lastScreen.y != Screen.height || _lastSafe != Screen.safeArea) Layout();
-            bool playing = !_helpOn && (_game.Mode == Mode.Explore || _game.Mode == Mode.Combat || _game.Mode == Mode.Backyard);
+            bool playing = !_helpOn && !_game.OverlayOpen && (_game.Mode == Mode.Explore || _game.Mode == Mode.Combat || _game.Mode == Mode.Backyard);
             var stick = PollJoystick(playing);
             if (playing)
             {
@@ -412,8 +537,11 @@ namespace Abduction
                 else if (Input.GetKeyDown(KeyCode.F)) { _game.Flee(); any = true; }
                 else if (Input.GetKeyDown(KeyCode.R)) { _game.RingNext(); any = true; }
                 else if (Input.GetKeyDown(KeyCode.H)) ShowHelp(true);
+                else if (Input.GetKeyDown(KeyCode.M) && _game.Level != null) { _game.ToggleMap(); any = true; }
+                else if (Input.GetKeyDown(KeyCode.I)) { _game.ToggleWeapons(); any = true; }
                 if (any) Refresh();
             }
+            else if (_game.OverlayOpen && !_helpOn && (Input.GetKeyDown(KeyCode.M) || Input.GetKeyDown(KeyCode.I) || Input.GetKeyDown(KeyCode.Escape))) { _game.CloseOverlays(); Refresh(); return; }
             if (Input.GetKeyDown(KeyCode.Escape)) { if (_helpOn) ShowHelp(false); else Application.Quit(); }
 
             // Eased animations: health bars glide, message fades in, overlays fade, abduction flash.
@@ -452,16 +580,20 @@ namespace Abduction
 
             bool fight = g.Mode == Mode.Combat, playing = g.Mode == Mode.Explore || fight || g.Mode == Mode.Backyard;
             _controls.gameObject.SetActive(playing);
+            if (!playing) g.CloseOverlays();
+            _mapBtn.gameObject.SetActive(g.Level != null);
             _useLabel.text = g.UseLabel; _altLabel.text = fight ? "FLEE" : "DROP";
             _world.Sync(g);
             _promptText.text = g.Prompt;
             _promptRect.gameObject.SetActive(!string.IsNullOrEmpty(g.Prompt) && g.Mode != Mode.Title && g.Mode != Mode.Victory);
             _mapRect.gameObject.SetActive(g.Level != null); _ringSquare.gameObject.SetActive(g.Mode != Mode.Title && g.Mode != Mode.Victory);
+            var ser = g.Weapons.Serialize(); if (ser != _savedWeapons) { _savedWeapons = ser; PlayerPrefs.SetString(WeaponsPrefKey, ser); PlayerPrefs.Save(); }
             if (g.Message != _lastMsg) { _lastMsg = g.Message; _msgT = 0; }
             _msg.text = g.Message;
             _warText.text = $"WAR  {g.War}/{g.WarMax}"; _spiritText.text = $"SPIRIT  {g.Spirit}/{g.SpiritMax}";
             RefreshRing();
             _foeBar.gameObject.SetActive(g.Foe != null);
+            RefreshOverlays();
             if (g.Level == null) { _deckText.text = $"BACKYARD  |  {GameData.SpeciesNames[(int)g.Species].ToUpper()}"; return; }
             _deckText.text = $"DECK {g.Depth}/{g.DeckCount}  |  {g.Facing.ToString().ToUpper()}  |  LIFE {g.Reincarnations + 1}";
             if (g.Foe != null) { SetFill(_foeFill, (float)Mathf.Max(0, g.Foe.Hp) / g.Foe.MaxHp); _foeText.text = $"{g.Foe.Name}  {Mathf.Max(0, g.Foe.Hp)}/{g.Foe.MaxHp}"; }

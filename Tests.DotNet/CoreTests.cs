@@ -238,14 +238,22 @@ public class CoreTests
     }
 
     // Portrait-locked: S22 safe areas (full 1080x2340, minus cutout/status ~ 1080x2250), plus a 1080x1920 and 1440x3088 phone.
-    [TestCase(1080, 2340)] [TestCase(1080, 2250)] [TestCase(1080, 1920)] [TestCase(1440, 3088)]
-    public void CornerLayoutNoOverlaps(int w, int h)
+    [TestCase(1080, 2340, false)] [TestCase(1080, 2250, false)] [TestCase(1080, 1920, false)] [TestCase(1440, 3088, false)]
+    [TestCase(1080, 2340, true)] [TestCase(1080, 2250, true)] [TestCase(1080, 1920, true)] [TestCase(1440, 3088, true)]
+    public void CornerLayoutNoOverlaps(int w, int h, bool largeText)
+    {
+        UiLayout.TextScale = largeText ? UiLayout.LargeScale : 1f;
+        try { CheckLayout(w, h, largeText); } finally { UiLayout.TextScale = 1f; }
+    }
+
+    static void CheckLayout(int w, int h, bool largeText)
     {
         var named = new List<(string n, Region r)>
         {
             ("hud", UiLayout.Hud(w, h)), ("map", UiLayout.Map(w, h)), ("ring", UiLayout.Ring(w, h)), ("help", UiLayout.HelpButton(w, h)),
             ("deck", UiLayout.DeckText(w, h)), ("head", UiLayout.Head(w, h)), ("joystick", UiLayout.JoystickZone(w, h)),
             ("prompt", UiLayout.Prompt(w, h)), ("foe", UiLayout.FoeBar(w, h)),
+            ("mapBtn", UiLayout.MapButton(w, h)), ("weaponsBtn", UiLayout.WeaponsButton(w, h)),
         };
         foreach (ActionButton b in System.Enum.GetValues(typeof(ActionButton))) named.Add(("btn" + b, UiLayout.Button(b, w, h)));
         foreach (var (n, r) in named) { Assert.GreaterOrEqual(r.X0, 0, n); Assert.GreaterOrEqual(r.Y0, 0, n); Assert.LessOrEqual(r.X1, 1, n); Assert.LessOrEqual(r.Y1, 1, n); Assert.Greater(r.W, 0, n); Assert.Greater(r.H, 0, n); }
@@ -264,8 +272,12 @@ public class CoreTests
         Assert.IsFalse(reach.Overlaps(UiLayout.Prompt(w, h)), "joystick ring below the prompt");
         foreach (ActionButton b in System.Enum.GetValues(typeof(ActionButton))) Assert.IsFalse(jzh.Overlaps(UiLayout.Button(b, w, h)), "joystick zone clear of buttons");
         var ring = UiLayout.Ring(w, h); var map = UiLayout.Map(w, h);
-        Assert.AreEqual(ring.W * w, ring.H * h, 0.5f, "ring panel is square"); Assert.Greater(ring.X0, 0.5f, "ring tucked in the right corner"); Assert.Greater(ring.Y0, 0.5f, "ring in the upper corner");
-        Assert.GreaterOrEqual(ring.W * w * UiLayout.SlotSize, 90, "ring slots big enough to tap");
+        Assert.AreEqual(ring.W * w, ring.H * h, 0.5f, "ring panel is square"); Assert.Greater(ring.X0, 0.45f, "ring tucked in the right corner"); Assert.AreEqual(1f, ring.X1, 0.03f); Assert.Greater(ring.Y0, 0.5f, "ring in the upper corner");
+        bool s22 = w == 1080 && h >= 2250;
+        Assert.GreaterOrEqual(ring.W * w * UiLayout.SlotSize, s22 && !largeText ? 125 : s22 ? 108 : 70, "ring slots big enough to tap (S22 ~+20% vs 113px before)");
+        if (largeText) { UiLayout.TextScale = 1f; float hudN = UiLayout.Hud(w, h).H; UiLayout.TextScale = UiLayout.LargeScale; Assert.Greater(UiLayout.Hud(w, h).H, hudN, "large text gets a taller HUD"); }
+        var ov = UiLayout.Overlay(w, h); var oc = UiLayout.OverlayClose(w, h); Assert.IsTrue(oc.X0 >= ov.X0 && oc.X1 <= ov.X1 && oc.Y0 >= ov.Y0 && oc.Y1 <= ov.Y1, "close X inside the overlay");
+        Assert.GreaterOrEqual(UiLayout.MapButton(w, h).W * w, 120, "map button tappable");
         Assert.GreaterOrEqual(map.W * w, 250, "map readable");
         // The central view (middle of the screen) stays clear of all UI.
         var centre = new Region(0.3f, 0.42f, 0.7f, 0.55f);
@@ -360,6 +372,81 @@ public class CoreTests
         var g4 = Started(9, Difficulty.Stargazer); int fx = g4.X + g4.Facing.Dx(), fy = g4.Y + g4.Facing.Dy();
         g4.Level.Monsters.RemoveAll(x => x.X == fx && x.Y == fy); g4.Level.Tiles[fx, fy] = Tile.Door;
         Assert.AreEqual("OPEN", g4.UseLabel); g4.UseAction(); Assert.AreEqual(Tile.OpenDoor, g4.Level.Tiles[fx, fy]);
+    }
+
+    [Test]
+    public void MapOverlayToggles()
+    {
+        var g = Started(3, Difficulty.Stargazer); g.Level.Monsters.Clear();
+        Assert.IsFalse(g.MapOpen);
+        g.ToggleMap(); Assert.IsTrue(g.MapOpen); Assert.IsTrue(g.OverlayOpen);
+        float px = g.PX, py = g.PY, yaw = g.Yaw; Run(g, 1, 1, 1f);
+        Assert.AreEqual(px, g.PX); Assert.AreEqual(py, g.PY); Assert.AreEqual(yaw, g.Yaw, "joystick paused while the map is open");
+        g.ToggleMap(); Assert.IsFalse(g.MapOpen, "tap MAP again closes");
+        g.ToggleMap(); g.ToggleWeapons(); Assert.IsFalse(g.MapOpen); Assert.IsTrue(g.WeaponsOpen, "one overlay at a time");
+        Run(g, 1, 0, 0.5f); Assert.AreEqual(px, g.PX); Assert.AreEqual(py, g.PY, "paused while weapons open");
+        g.CloseOverlays(); Assert.IsFalse(g.OverlayOpen, "X / tap outside closes");
+        // Big map is centred on the player with the arrow in the middle.
+        var buf = MiniMap.Render(g, 13, 40); int n = 13 * 40; Assert.AreEqual(MiniMap.PlayerC, buf[(n / 2) * n + n / 2]);
+    }
+
+    [Test]
+    public void WeaponCollectionCountsAndTracks()
+    {
+        Assert.AreEqual(GameData.WeaponNames.Length + GameData.MagicNames.Length, WeaponCollection.Total);
+        Assert.AreEqual(11, WeaponCollection.Total);
+        var g = Started(4, Difficulty.Stargazer);
+        Assert.AreEqual(2, g.Weapons.Count, "starting kit counts"); Assert.AreEqual("Weapons: 2 / 11 collected", g.Weapons.Header);
+        g.Level.Monsters.Clear();
+        // Pick up a new weapon from the floor by walking onto it.
+        int fx = g.X + g.Facing.Dx(), fy = g.Y + g.Facing.Dy(); g.Level.Tiles[fx, fy] = Tile.Floor; g.Level.Chests.RemoveAll(c => c.X == fx && c.Y == fy);
+        g.Level.FloorItems[Level.Key(fx, fy)] = new Item(ItemKind.Weapon, "Quark Rifle", 20);
+        g.StepForward(); Assert.IsTrue(g.Weapons.Has("Quark Rifle")); Assert.AreEqual(3, g.Weapons.Count); StringAssert.Contains("collection", g.Message);
+        // Dropping keeps it collected; food never counts.
+        g.RingSelect(g.Ring.Count - 1); g.DropCurrent(); Assert.IsTrue(g.Weapons.Has("Quark Rifle"));
+        Assert.IsFalse(g.Weapons.Note(new Item(ItemKind.Food, "Ration Gel", 5))); Assert.AreEqual(3, g.Weapons.Count);
+        Assert.IsFalse(g.Weapons.Note(new Item(ItemKind.Weapon, "Quark Rifle", 25)), "duplicate is not new"); Assert.AreEqual(25, g.Weapons.Best("Quark Rifle"));
+        // Persisted across runs (PlayerPrefs string round-trip).
+        var saved = g.Weapons.Serialize(); var g2 = new Game(99); g2.Weapons.Load(saved); g2.Start(Difficulty.Doomed);
+        Assert.AreEqual(3, g2.Weapons.Count); Assert.AreEqual(25, g2.Weapons.Best("Quark Rifle"));
+        g2.Weapons.Load("Bogus=4;;Quark Rifle=x"); Assert.AreEqual(1, g2.Weapons.Count, "junk ignored");
+    }
+
+    [Test]
+    public void StatCardValues()
+    {
+        var g = Started(6, Difficulty.Stargazer);
+        Assert.AreEqual(g.EquippedWeapon.Power, g.AttackValue); Assert.AreEqual(0, g.Defense);
+        g.Ring.Add(new Item(ItemKind.Armor, "Exo Harness", 7)); g.Ring.Add(new Item(ItemKind.Food, "Candy Bar", 2)); g.RingSelect(g.Ring.Count - 1); g.DropCurrent();
+        Assert.AreEqual(7, g.Defense);
+        MonsterKind sk = null; foreach (var k in GameData.Monsters) if (k.Nature == MonsterNature.Spirit) { sk = k; break; } var spirit = new Monster { Kind = sk, Hp = 5, MaxHp = 5 };
+        g.RingSelect(0); g.Foe = spirit; Assert.AreEqual(MonsterNature.War, g.AttackNature); Assert.AreEqual(System.Math.Max(1, g.EquippedWeapon.Power / 2), g.AttackValue, "wrong kind is halved");
+        g.RingSelect(1); Assert.AreEqual(MonsterNature.Spirit, g.AttackNature); Assert.AreEqual(g.EquippedWeapon.Power, g.AttackValue);
+    }
+
+    [TestCaseSource(nameof(Seeds))]
+    public void DecorDeterministicAndSkipsLandmarks(ulong seed)
+    {
+        int faces = 0, decorated = 0; var kinds = new HashSet<DecorKind>();
+        for (int d = 1; d <= 8; d++)
+        {
+            var L = new Level(d, seed, Difficulty.Abductee);
+            var a = Decor.Plan(L, seed); var b = Decor.Plan(new Level(d, seed, Difficulty.Abductee), seed);
+            Assert.AreEqual(a.Count, b.Count); for (int i = 0; i < a.Count; i++) { Assert.AreEqual(a[i].X, b[i].X); Assert.AreEqual(a[i].Side, b[i].Side); Assert.AreEqual(a[i].Kind, b[i].Kind); }
+            foreach (var f in a)
+            {
+                Assert.AreNotEqual(Tile.Wall, L.Tiles[f.X, f.Y]); Assert.AreEqual(Tile.Wall, L.At(f.X + f.Side.Dx(), f.Y + f.Side.Dy()), "decor only on real wall faces");
+                for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++)
+                { var t = L.At(f.X + dx, f.Y + dy); Assert.IsFalse(t == Tile.Door || t == Tile.OpenDoor || t == Tile.Teleporter || t == Tile.HomeMachine, "no decor at hatches/teleporters"); }
+                kinds.Add(f.Kind);
+            }
+            for (int x = 0; x < Level.Size; x++) for (int y = 0; y < Level.Size; y++)
+                if (L.Tiles[x, y] != Tile.Wall && !Decor.NearLandmark(L, x, y)) for (int k = 0; k < 4; k++) if (L.At(x + ((Dir)k).Dx(), y + ((Dir)k).Dy()) == Tile.Wall) faces++;
+            decorated += a.Count;
+        }
+        float frac = decorated / (float)faces; Assert.That(frac, Is.InRange(0.28f, 0.42f), "about 35% of eligible faces");
+        Assert.GreaterOrEqual(kinds.Count, 7, "variety across decks");
+        Assert.AreNotEqual(Decor.Plan(new Level(1, seed, Difficulty.Abductee), seed).Count == 0, true);
     }
 
     [Test, Explicit("dumps layout regions for the preview PNG")]

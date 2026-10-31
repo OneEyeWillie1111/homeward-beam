@@ -15,7 +15,7 @@ namespace Abduction
         public Camera Cam;
         const float WallH = 1.25f, EyeH = 0.62f;
         Level _builtFor; Transform _levelRoot;
-        Material _wallMat, _floorMat, _ceilMat, _stripMat, _doorMat, _teleMat, _homeMat, _lockerMat, _trimMat;
+        Material _decorMat, _decorBlinkMat, _wallMat, _floorMat, _ceilMat, _stripMat, _doorMat, _teleMat, _homeMat, _lockerMat, _trimMat;
         Mesh _sphere, _cyl, _box;
         readonly Dictionary<int, Transform> _doors = new Dictionary<int, Transform>();
         readonly Dictionary<Monster, Transform> _monsters = new Dictionary<Monster, Transform>();
@@ -42,6 +42,7 @@ namespace Abduction
             _wallMat = ProcGen.Metal(Color.white, 0.85f, 0.75f, ProcGen.MetalAlbedo(256, new Color(0.6f, 0.62f, 0.64f), 3, false), ProcGen.MetalNormal(256, 3, false));
             _floorMat = ProcGen.Metal(Color.white, 0.9f, 0.6f, ProcGen.MetalAlbedo(256, new Color(0.36f, 0.4f, 0.46f), 5, true), ProcGen.MetalNormal(256, 5, true, 3.5f));
             _ceilMat = ProcGen.Metal(Color.white, 0.7f, 0.45f, ProcGen.MetalAlbedo(128, new Color(0.25f, 0.28f, 0.33f), 9, true), ProcGen.MetalNormal(128, 9, true));
+            _decorMat = ProcGen.DecorMaterial(false); _decorBlinkMat = ProcGen.DecorMaterial(true);
             _stripMat = ProcGen.Glow(new Color(0.55f, 0.75f, 0.8f), 1.6f);
             _doorMat = ProcGen.Metal(new Color(0.72f, 0.58f, 0.32f), 0.95f, 0.8f, null, ProcGen.MetalNormal(128, 11, false));
             _teleMat = ProcGen.Glow(new Color(0.1f, 0.9f, 1f), 3f);
@@ -97,10 +98,34 @@ namespace Abduction
                     if (L.Tiles[x, y] == Tile.Door || L.Tiles[x, y] == Tile.OpenDoor) MakeDoor(L, x, y);
                     if (L.Tiles[x, y] == Tile.Teleporter || L.Tiles[x, y] == Tile.HomeMachine) MakePad(x, y, L.Tiles[x, y] == Tile.HomeMachine);
                 }
+            // Procedural alien decor on ~35% of wall faces (deterministic per deck; never at hatches/teleporters). Two shared materials = 2 draw calls.
+            var decor = new MeshBuilder(); var blink = new MeshBuilder();
+            ulong seed = AbductionApp.Instance != null ? AbductionApp.Instance.Game.RunSeed : 0;
+            foreach (var f in Decor.Plan(L, seed)) AddDecor(f.Blink ? blink : decor, f);
+            Part("Decor", decor.Mesh(), _decorMat); Part("DecorBlink", blink.Mesh(), _decorBlinkMat);
             Part("Walls", walls.Mesh(), _wallMat); Part("Floor", floors.Mesh(), _floorMat); Part("Ceiling", ceils.Mesh(), _ceilMat); Part("Strips", strips.Mesh(), _stripMat);
             foreach (var kv in L.FloorItems) MakeItem(kv.Key, kv.Value);
             foreach (var ch in L.Chests) MakeChest(ch);
             _snap = true; _probeTimer = 0.05f;
+        }
+
+        void AddDecor(MeshBuilder mb, DecorFace f)
+        {
+            var c = W(f.X, f.Y); var n = -new Vector3(f.Side.Dx(), 0, -f.Side.Dy());
+            var o = c - n * 0.5f + n * 0.006f; var side = Vector3.Cross(Vector3.up, n) * 0.5f;
+            // Size and height per kind: framed panels at eye level, pipes/vents/paneling taller.
+            float hw, y0, y1;
+            switch (f.Kind)
+            {
+                case DecorKind.ConduitPipes: hw = 0.42f; y0 = 0.12f; y1 = WallH - 0.12f; break;
+                case DecorKind.RecessedPanel: hw = 0.4f; y0 = 0.14f; y1 = WallH - 0.16f; break;
+                case DecorKind.SerpentMural: hw = 0.3f; y0 = 0.25f; y1 = WallH - 0.14f; break;
+                case DecorKind.SpecimenTank: hw = 0.3f; y0 = 0.15f; y1 = 1.05f; break;
+                case DecorKind.VentGrille: hw = 0.26f; y0 = 0.16f; y1 = 0.5f; break;
+                default: hw = 0.3f; y0 = 0.42f; y1 = 1.0f; break;
+            }
+            var uv = ProcGen.DecorUV(f.Kind); var s = side * (hw / 0.5f);
+            mb.QuadUV(o - s + Vector3.up * y0, o + s + Vector3.up * y0, o + s + Vector3.up * y1, o - s + Vector3.up * y1, n, uv);
         }
 
         Transform Part(string name, Mesh mesh, Material mat, Transform parent = null)
@@ -320,6 +345,7 @@ namespace Abduction
             if (Cam == null || AbductionApp.Instance == null) return;
             var g = AbductionApp.Instance.Game;
             float dt = Time.deltaTime, t = Time.time;
+            if (_decorBlinkMat) _decorBlinkMat.SetColor("_EmissionColor", Color.white * (0.35f + 1.4f * Mathf.Pow(0.5f + 0.5f * Mathf.Sin(t * 3.1f), 3)));
             PlaceHead();
             if (g.Level == null)
             {
@@ -469,6 +495,13 @@ namespace Abduction
                 int i = v.Count; v.Add(a); v.Add(b); v.Add(c); v.Add(d);
                 for (int k = 0; k < 4; k++) n.Add(normal);
                 uv.Add(new Vector2(0, 0)); uv.Add(new Vector2(uw, 0)); uv.Add(new Vector2(uw, vh)); uv.Add(new Vector2(0, vh));
+                ProcGen.AddQuad(t, v, i, normal);
+            }
+            public void QuadUV(Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector3 normal, Rect r)
+            {
+                int i = v.Count; v.Add(a); v.Add(b); v.Add(c); v.Add(d);
+                for (int k = 0; k < 4; k++) n.Add(normal);
+                uv.Add(new Vector2(r.xMin, r.yMin)); uv.Add(new Vector2(r.xMax, r.yMin)); uv.Add(new Vector2(r.xMax, r.yMax)); uv.Add(new Vector2(r.xMin, r.yMax));
                 ProcGen.AddQuad(t, v, i, normal);
             }
             public Mesh Mesh() => ProcGen.Build("Deck", v, n, uv, t);
