@@ -43,6 +43,15 @@ namespace Abduction.Core
         /// <summary>MAP and WEAPONS: small round buttons stacked just right of the corner minimap, below the deck-info row.</summary>
         public static Region MapButton(float w, float h) { var map = Map(w, h); var deck = DeckText(w, h); float d = SmallButtonPx(w, h), m = M(w, h) * 0.02f; return Sq(map.X1 * w + m, deck.Y0 * h - m - d, d, w, h); }
         public static Region WeaponsButton(float w, float h) { var mb = MapButton(w, h); float d = SmallButtonPx(w, h), m = M(w, h) * 0.025f; return Sq(mb.X0 * w, mb.Y0 * h - m - d, d, w, h); }
+        /// <summary>UFO (ship cross-section) button: under WEAPONS.</summary>
+        /// On short screens where that would reach the prompt/enemy bar, it tops the right-edge stack instead (still below the ring).
+        public static Region UfoButton(float w, float h)
+        {
+            var wb = WeaponsButton(w, h); float d = SmallButtonPx(w, h), m = M(w, h) * 0.025f; var r = Sq(wb.X0 * w, wb.Y0 * h - m - d, d, w, h);
+            if (r.Y0 > FoeBar(w, h).Y1 + 0.01f) return r;
+            float bd = ButtonPx(w, h), bm = M(w, h) * 0.03f, gap = M(w, h) * 0.025f, cx = w - bm - bd / 2;
+            return Sq(cx - d / 2, bm + 4 * (bd + gap), d, w, h);
+        }
         /// <summary>Modal panel used by the big map and the weapons collection.</summary>
         public static Region Overlay(float w, float h) => new Region(0.04f, 0.16f, 0.96f, 0.86f);
         /// <summary>Close X in the overlay's top-right corner.</summary>

@@ -27,11 +27,13 @@ namespace Abduction
         readonly Dictionary<ActionButton, RectTransform> _actBtns = new Dictionary<ActionButton, RectTransform>();
         Text _useLabel, _altLabel; RawImage _hubIcon;
         // MAP / WEAPONS overlays
-        RectTransform _mapBtn, _wpnBtn, _overlayRoot, _overlayPanel, _overlayClose, _bigMapRect, _wpnScrollRect;
+        RectTransform _mapBtn, _wpnBtn, _ufoBtn, _ufoArtRect, _ufoYou, _ufoHighlight; RawImage _ufoArt; Texture2D _ufoTex; int _ufoTexN = -1, _ufoTexDepth = -1;
+        readonly List<Text> _ufoLabels = new List<Text>(); Text _ufoYouText;
+        RectTransform  _overlayRoot, _overlayPanel, _overlayClose, _bigMapRect, _wpnScrollRect;
         Text _overlayTitle, _overlayFoot; RawImage _bigMap; Texture2D _bigMapTex; Color32[] _bigMapBuf;
         readonly List<(RawImage icon, Text name, Text info, Image bg)> _wpnRows = new List<(RawImage, Text, Text, Image)>();
         string _savedWeapons; const string WeaponsPrefKey = "abduction.weapons.v1";
-        const int BigMapCells = 13, BigMapPx = 40;
+        const int BigMapCells = 13, BigMapPx = 40, UfoW = 720, UfoH = 1000;
         // Readability: every label is registered with its base size so the Large Text setting can rescale them all.
         readonly List<(Text t, int baseSize)> _texts = new List<(Text, int)>();
         const string LargeTextPrefKey = "abduction.largetext.v1"; Text _largeBtnLabel;
@@ -178,6 +180,7 @@ namespace Abduction
             _mapBtn = RoundButton("MAP", () => { if (_game.Level != null) _game.ToggleMap(); }, new Color(0.2f, 0.75f, 0.65f, 0.5f), out var ml); ml.fontSize = 22; ml.resizeTextMaxSize = 22;
             _wpnBtn = RoundButton("ARMS", () => _game.ToggleWeapons(), new Color(0.85f, 0.55f, 0.2f, 0.5f), out var wl); wl.fontSize = 22; wl.resizeTextMaxSize = 22;
             wl.text = "WEAP\nONS"; wl.lineSpacing = 0.8f;
+            _ufoBtn = RoundButton("UFO", () => _game.ToggleUfo(), new Color(0.45f, 0.5f, 0.6f, 0.5f), out var ul); ul.fontSize = 22; ul.resizeTextMaxSize = 22;
             _overlayRoot = Container(_root, "Overlay"); Stretch(_overlayRoot);
             var dim = new GameObject("TapOutside", typeof(RectTransform)).AddComponent<Image>(); dim.transform.SetParent(_overlayRoot, false); Stretch(dim.rectTransform);
             dim.color = new Color(0, 0, 0, 0.55f); var dimBtn = dim.gameObject.AddComponent<Button>(); dimBtn.transition = Selectable.Transition.None;
@@ -189,6 +192,14 @@ namespace Abduction
             // Big map: square, centred in the panel.
             _bigMapRect = Container(_overlayPanel, "BigMap"); Set(_bigMapRect, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f));
             _bigMap = _bigMapRect.gameObject.AddComponent<RawImage>(); _bigMap.texture = _bigMapTex; _bigMap.raycastTarget = false;
+            // UFO cross-section: procedural art (Core.ShipView) with live labels, a pulsing YOU marker and the current deck highlighted.
+            _ufoArtRect = Container(_overlayPanel, "UfoArt"); Set(_ufoArtRect, new Vector2(0.5f, 0.49f), new Vector2(0.5f, 0.49f));
+            _ufoArt = _ufoArtRect.gameObject.AddComponent<RawImage>(); _ufoArt.raycastTarget = false;
+            var hl = new GameObject("CurrentDeck", typeof(RectTransform)).AddComponent<Image>(); hl.transform.SetParent(_ufoArtRect, false); hl.raycastTarget = false; hl.color = new Color(0.4f, 1f, 0.95f, 0.5f); _ufoHighlight = hl.rectTransform;
+            _ufoYou = Card(_ufoArtRect, "You", new Color(0.1f, 0.85f, 0.75f, 0.95f), 16, false); _ufoYou.GetComponent<Image>().raycastTarget = false;
+            _ufoYouText = Label(_ufoYou, "Text", 26, TextAnchor.MiddleCenter, Vector2.zero, Vector2.one); _ufoYouText.text = "< YOU"; _ufoYouText.color = new Color(0.02f, 0.08f, 0.08f);
+            ((RectTransform)_ufoYouText.transform).offsetMin = new Vector2(4, 0); ((RectTransform)_ufoYouText.transform).offsetMax = new Vector2(-4, 0);
+            _ufoTex = new Texture2D(UfoW, UfoH, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp }; _ufoArt.texture = _ufoTex;
             // Weapons list: vertical scroll view.
             _wpnScrollRect = Container(_overlayPanel, "WeaponsScroll"); Set(_wpnScrollRect, new Vector2(0.03f, 0.09f), new Vector2(0.97f, 0.89f));
             var vpImg = _wpnScrollRect.gameObject.AddComponent<Image>(); vpImg.color = new Color(0, 0, 0, 0.01f);
@@ -214,7 +225,8 @@ namespace Abduction
             var g = _game; bool on = g.OverlayOpen;
             _overlayRoot.gameObject.SetActive(on); if (!on) return;
             _overlayRoot.SetAsLastSibling(); _flash.transform.SetAsLastSibling();
-            _bigMapRect.gameObject.SetActive(g.MapOpen); _wpnScrollRect.gameObject.SetActive(g.WeaponsOpen);
+            _bigMapRect.gameObject.SetActive(g.MapOpen); _wpnScrollRect.gameObject.SetActive(g.WeaponsOpen); _ufoArtRect.gameObject.SetActive(g.UfoOpen);
+            if (g.UfoOpen) { RefreshUfo(); return; }
             if (g.MapOpen)
             {
                 if (g.Level == null) { g.CloseOverlays(); _overlayRoot.gameObject.SetActive(false); return; }
@@ -238,6 +250,39 @@ namespace Abduction
                     bg.color = has ? new Color(0.1f, 0.15f, 0.22f, 0.9f) : new Color(0.06f, 0.08f, 0.11f, 0.6f);
                 }
             }
+        }
+
+        void RefreshUfo()
+        {
+            var g = _game; int n = g.DeckCount, d = g.Depth;
+            _overlayTitle.text = d <= 0 ? $"<b>THE SHIP  |  {n} DECKS</b>" : $"<b>DECK {d} / {n}</b>";
+            _overlayFoot.text = d <= 0 ? "You are still in the backyard. The ship waits above." : g.DecksToHome == 0 ? (g.BossAlive ? "Final deck: defeat Ixmorrhan, then the machine home." : "Final deck: the machine home is open!") : $"{g.DecksToHome} deck{(g.DecksToHome == 1 ? "" : "s")} to home";
+            if (_ufoTexN != n || _ufoTexDepth != d)
+            {
+                var px = ShipView.Render(n, d, UfoW, UfoH); var buf = new Color32[UfoW * UfoH];
+                for (int y = 0; y < UfoH; y++) for (int x = 0; x < UfoW; x++) { uint c = px[y * UfoW + x]; buf[(UfoH - 1 - y) * UfoW + x] = new Color32((byte)(c >> 16), (byte)(c >> 8), (byte)c, 255); }
+                _ufoTex.SetPixels32(buf); _ufoTex.Apply(false); _ufoTexN = n; _ufoTexDepth = d;
+                // Deck number labels on the hull, left of the cutaway: every deck up to 10, else 1, every 5th and the last.
+                var decks = ShipView.LabelDecks(n);
+                while (_ufoLabels.Count < decks.Count) { var t = Label(_ufoArtRect, "DeckLabel", 22, TextAnchor.MiddleRight, Vector2.zero, Vector2.one); _ufoLabels.Add(t); ApplyTextScaleTo(t, 22); }
+                for (int i = 0; i < _ufoLabels.Count; i++)
+                {
+                    var t = _ufoLabels[i]; t.gameObject.SetActive(i < decks.Count); if (i >= decks.Count) continue;
+                    int k = decks[i]; var (y0, y1) = ShipView.Band(k, n); float cy = 1 - (y0 + y1) / 2, half = Mathf.Max((y1 - y0) / 2, 0.016f);
+                    var r = (RectTransform)t.transform; r.anchorMin = new Vector2(0.02f, cy - half); r.anchorMax = new Vector2(ShipView.Core.X0 - 0.01f, cy + half); r.offsetMin = r.offsetMax = Vector2.zero;
+                    t.text = k < d ? $"<color=#7fe8ff>DECK {k}</color>" : k == d ? $"<color=#ffffff>DECK {k}</color>" : $"<color=#c8d2dc>DECK {k}</color>";
+                }
+            }
+            float yy = 1 - ShipView.YouY(d, n); float bh = d > 0 ? (ShipView.Band(d, n).y1 - ShipView.Band(d, n).y0) : 0.02f;
+            _ufoHighlight.gameObject.SetActive(d > 0);
+            _ufoHighlight.anchorMin = new Vector2(ShipView.Core.X0, yy - bh / 2); _ufoHighlight.anchorMax = new Vector2(ShipView.Core.X1, yy + bh / 2); _ufoHighlight.offsetMin = _ufoHighlight.offsetMax = Vector2.zero;
+            float yh = 0.028f * (0.7f + 0.3f * UiLayout.TextScale);
+            _ufoYou.anchorMin = new Vector2(ShipView.Core.X1 + 0.01f, yy - yh); _ufoYou.anchorMax = new Vector2(0.99f, yy + yh); _ufoYou.offsetMin = _ufoYou.offsetMax = Vector2.zero;
+        }
+        void ApplyTextScaleTo(Text t, int b)
+        {
+            float k = UiLayout.BaseTextBoost * UiLayout.TextScale; int max = Mathf.RoundToInt(b * k);
+            t.fontSize = max; t.resizeTextMaxSize = max; t.resizeTextMinSize = Mathf.Min(max, Mathf.Max(10, Mathf.RoundToInt(b * 0.5f * UiLayout.TextScale)));
         }
 
         RectTransform RoundButton(string label, System.Action act, Color c, out Text text)
@@ -332,6 +377,7 @@ namespace Abduction
                 int max = Mathf.RoundToInt(b * k);
                 t.fontSize = max; t.resizeTextMaxSize = max; t.resizeTextMinSize = Mathf.Min(max, Mathf.Max(12, Mathf.RoundToInt(b * 0.6f * UiLayout.TextScale)));
             }
+            foreach (var t in _ufoLabels) ApplyTextScaleTo(t, 22);
             if (_largeBtnLabel) _largeBtnLabel.text = UiLayout.TextScale > 1f ? "LARGE TEXT: ON" : "LARGE TEXT: OFF";
         }
 
@@ -463,9 +509,10 @@ namespace Abduction
             Apply(_helpBtnRect, UiLayout.HelpButton(w, h), 0); Apply((RectTransform)_deckText.transform.parent, UiLayout.DeckText(w, h), 0);
             Apply(_promptRect, UiLayout.Prompt(w, h), 0); Apply(_foeBar, UiLayout.FoeBar(w, h), 0);
             foreach (var kv in _actBtns) Apply(kv.Value, UiLayout.Button(kv.Key, w, h), 0);
-            Apply(_mapBtn, UiLayout.MapButton(w, h), 0); Apply(_wpnBtn, UiLayout.WeaponsButton(w, h), 0);
+            Apply(_mapBtn, UiLayout.MapButton(w, h), 0); Apply(_wpnBtn, UiLayout.WeaponsButton(w, h), 0); Apply(_ufoBtn, UiLayout.UfoButton(w, h), 0);
             Apply(_overlayPanel, UiLayout.Overlay(w, h), 0); Apply(_overlayClose, UiLayout.OverlayClose(w, h), 0);
-            { var o = UiLayout.Overlay(w, h); float side = Mathf.Min(o.W * w * 0.94f, o.H * h * 0.78f) / (_canvas.scaleFactor > 0 ? _canvas.scaleFactor : 1); _bigMapRect.sizeDelta = new Vector2(side, side); }
+            { var o = UiLayout.Overlay(w, h); float side = Mathf.Min(o.W * w * 0.94f, o.H * h * 0.78f) / (_canvas.scaleFactor > 0 ? _canvas.scaleFactor : 1); _bigMapRect.sizeDelta = new Vector2(side, side);
+              float k2 = _canvas.scaleFactor > 0 ? _canvas.scaleFactor : 1; float aw = Mathf.Min(o.W * w * 0.96f, o.H * h * 0.8f * UfoW / UfoH); _ufoArtRect.sizeDelta = new Vector2(aw, aw * UfoH / UfoW) / k2; }
             var hd = UiLayout.Head(w, h);
             _world.HeadVX = (sa.xMin + hd.Cx * w) / sw; _world.HeadVY = (sa.yMin + hd.Cy * h) / sh; _world.HeadVH = hd.H * h / sh;
             _joyZone = UiLayout.JoystickZone(w, h); _joyR = UiLayout.JoystickRadiusPx(w, h);
@@ -539,9 +586,10 @@ namespace Abduction
                 else if (Input.GetKeyDown(KeyCode.H)) ShowHelp(true);
                 else if (Input.GetKeyDown(KeyCode.M) && _game.Level != null) { _game.ToggleMap(); any = true; }
                 else if (Input.GetKeyDown(KeyCode.I)) { _game.ToggleWeapons(); any = true; }
+                else if (Input.GetKeyDown(KeyCode.U)) { _game.ToggleUfo(); any = true; }
                 if (any) Refresh();
             }
-            else if (_game.OverlayOpen && !_helpOn && (Input.GetKeyDown(KeyCode.M) || Input.GetKeyDown(KeyCode.I) || Input.GetKeyDown(KeyCode.Escape))) { _game.CloseOverlays(); Refresh(); return; }
+            else if (_game.OverlayOpen && !_helpOn && (Input.GetKeyDown(KeyCode.M) || Input.GetKeyDown(KeyCode.I) || Input.GetKeyDown(KeyCode.U) || Input.GetKeyDown(KeyCode.Escape))) { _game.CloseOverlays(); Refresh(); return; }
             if (Input.GetKeyDown(KeyCode.Escape)) { if (_helpOn) ShowHelp(false); else Application.Quit(); }
 
             // Eased animations: health bars glide, message fades in, overlays fade, abduction flash.
@@ -556,6 +604,12 @@ namespace Abduction
             _helpGroup.alpha = Mathf.MoveTowards(_helpGroup.alpha, _helpOn ? 1 : 0, dt * 6f);
             _helpPanel.gameObject.SetActive(_helpOn || _helpGroup.alpha > 0.001f);
             var fc = _flash.color; fc.a = Mathf.MoveTowards(fc.a, 0, dt * 0.9f); _flash.color = fc;
+            if (_game.UfoOpen)
+            {
+                float p = 0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * 4f);
+                _ufoHighlight.GetComponent<Image>().color = new Color(0.4f, 1f, 0.95f, 0.25f + 0.45f * p);
+                _ufoYou.localScale = Vector3.one * (1f + 0.08f * p);
+            }
         }
         static void SetFill(Image f, float v) { var r = (RectTransform)f.transform; r.anchorMax = new Vector2(Mathf.Clamp01(v), 1); f.enabled = v > 0.01f; }
 

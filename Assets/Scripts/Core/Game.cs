@@ -28,11 +28,17 @@ namespace Abduction.Core
         /// <summary>Every attack item ever held (starting kit + pickups), kept when dropped and across runs.</summary>
         public readonly WeaponCollection Weapons = new WeaponCollection();
         /// <summary>Full-screen overlays. While either is open the joystick is paused (Move does nothing).</summary>
-        public bool MapOpen, WeaponsOpen;
-        public bool OverlayOpen => MapOpen || WeaponsOpen;
-        public void ToggleMap() { MapOpen = !MapOpen; if (MapOpen) WeaponsOpen = false; Play(Sfx.Select); }
-        public void ToggleWeapons() { WeaponsOpen = !WeaponsOpen; if (WeaponsOpen) MapOpen = false; Play(Sfx.Select); }
-        public void CloseOverlays() { MapOpen = WeaponsOpen = false; }
+        public bool MapOpen, WeaponsOpen, UfoOpen;
+        public bool OverlayOpen => MapOpen || WeaponsOpen || UfoOpen;
+        public void ToggleUfo() { UfoOpen = !UfoOpen; if (UfoOpen) MapOpen = WeaponsOpen = false; Play(Sfx.Select); }
+        /// <summary>Decks still between you and home (0 on the final deck; all of them from the backyard).</summary>
+        public int DecksToHome => Math.Max(0, DeckCount - Depth);
+        /// <summary>Ixmorrhan is alive on the final deck: the machine home stays locked.</summary>
+        public bool BossAlive => Level != null && Depth == DeckCount && Level.Monsters.Exists(m => m.IsBoss && m.Hp > 0);
+        public const string MachineLockedMessage = "Ixmorrhan still lives. The machine won't answer.";
+        public void ToggleMap() { MapOpen = !MapOpen; if (MapOpen) WeaponsOpen = UfoOpen = false; Play(Sfx.Select); }
+        public void ToggleWeapons() { WeaponsOpen = !WeaponsOpen; if (WeaponsOpen) MapOpen = UfoOpen = false; Play(Sfx.Select); }
+        public void CloseOverlays() { MapOpen = WeaponsOpen = UfoOpen = false; }
         bool Gain(Item it) { if (!Ring.Add(it)) return false; if (Weapons.Note(it)) Message += $" New weapon for your collection: {it.Name}!"; return true; }
         public Monster Foe; int _fromX, _fromY;
         public string Message = "";
@@ -163,7 +169,7 @@ namespace Abduction.Core
                 else Message = $"{it.Name} lies here, but your ring is full. Drop something.";
             }
             if (Level.At(X, Y) == Tile.Teleporter) Message = "A teleporter pad hums here. Tap USE to beam down a deck.";
-            if (Level.At(X, Y) == Tile.HomeMachine) Message = "The teleportation machine home! Tap USE.";
+            if (Level.At(X, Y) == Tile.HomeMachine) Message = BossAlive ? MachineLockedMessage : "The teleportation machine home! Tap USE.";
             // A monster standing next to you in its room notices you and attacks.
             var near = Level.MonsterAt(X + Facing.Dx(), Y + Facing.Dy());
             if (near != null) BeginCombat(near);
@@ -193,6 +199,7 @@ namespace Abduction.Core
             if (Mode == Mode.Backyard) { Abduct(); return true; }
             if (Mode != Mode.Explore) return false;
             var t = Level.At(X, Y);
+            if (t == Tile.HomeMachine && BossAlive) { Message = MachineLockedMessage; Play(Sfx.Bump); return false; }
             if (t == Tile.HomeMachine) { Mode = Mode.Victory; Message = "The machine flares. You wake up in your own bed. You're home!"; Play(Sfx.Victory); return true; }
             if (t != Tile.Teleporter) { Message = "No teleporter here."; return false; }
             EnterLevel(Depth + 1);
@@ -240,7 +247,7 @@ namespace Abduction.Core
                 }
                 var t = Level.At(X, Y);
                 if (t == Tile.Teleporter) return "Teleporter pad: tap USE to beam down a deck.";
-                if (t == Tile.HomeMachine) return "The machine home: tap USE!";
+                if (t == Tile.HomeMachine) return BossAlive ? MachineLockedMessage + " Defeat him first." : "The machine home: tap USE!";
                 int fx = X + Facing.Dx(), fy = Y + Facing.Dy();
                 if (Level.At(fx, fy) == Tile.Door) return "Hatch ahead: tap USE to open.";
                 var c = Level.ChestAt(fx, fy);
@@ -259,7 +266,7 @@ namespace Abduction.Core
             {
                 if (Mode == Mode.Backyard) return "BEAM";
                 if (Mode != Mode.Explore || Level == null) return "USE";
-                var t = Level.At(X, Y); if (t == Tile.Teleporter || t == Tile.HomeMachine) return "BEAM";
+                var t = Level.At(X, Y); if (t == Tile.HomeMachine && BossAlive) return "LOCKED"; if (t == Tile.Teleporter || t == Tile.HomeMachine) return "BEAM";
                 int fx = X + Facing.Dx(), fy = Y + Facing.Dy();
                 if (Level.At(fx, fy) == Tile.Door || Level.ChestAt(fx, fy) != null) return "OPEN";
                 return "USE";
@@ -271,7 +278,7 @@ namespace Abduction.Core
         {
             switch (UseLabel)
             {
-                case "BEAM": Descend(); return;
+                case "BEAM": case "LOCKED": Descend(); return;
                 case "OPEN": Open(); return;
                 default: UseItem(); return;
             }

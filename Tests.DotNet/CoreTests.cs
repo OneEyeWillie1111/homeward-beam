@@ -253,7 +253,7 @@ public class CoreTests
             ("hud", UiLayout.Hud(w, h)), ("map", UiLayout.Map(w, h)), ("ring", UiLayout.Ring(w, h)), ("help", UiLayout.HelpButton(w, h)),
             ("deck", UiLayout.DeckText(w, h)), ("head", UiLayout.Head(w, h)), ("joystick", UiLayout.JoystickZone(w, h)),
             ("prompt", UiLayout.Prompt(w, h)), ("foe", UiLayout.FoeBar(w, h)),
-            ("mapBtn", UiLayout.MapButton(w, h)), ("weaponsBtn", UiLayout.WeaponsButton(w, h)),
+            ("mapBtn", UiLayout.MapButton(w, h)), ("weaponsBtn", UiLayout.WeaponsButton(w, h)), ("ufoBtn", UiLayout.UfoButton(w, h)),
         };
         foreach (ActionButton b in System.Enum.GetValues(typeof(ActionButton))) named.Add(("btn" + b, UiLayout.Button(b, w, h)));
         foreach (var (n, r) in named) { Assert.GreaterOrEqual(r.X0, 0, n); Assert.GreaterOrEqual(r.Y0, 0, n); Assert.LessOrEqual(r.X1, 1, n); Assert.LessOrEqual(r.Y1, 1, n); Assert.Greater(r.W, 0, n); Assert.Greater(r.H, 0, n); }
@@ -449,13 +449,78 @@ public class CoreTests
         Assert.AreNotEqual(Decor.Plan(new Level(1, seed, Difficulty.Abductee), seed).Count == 0, true);
     }
 
+    [Test]
+    public void MachineHomeLockedUntilBossDies()
+    {
+        var g = Started(3, Difficulty.Stargazer); g.EnterLevel(10);
+        Assert.IsTrue(g.BossAlive);
+        g.X = g.Level.TeleX; g.Y = g.Level.TeleY; g.Snap();
+        Assert.AreEqual("LOCKED", g.UseLabel); StringAssert.Contains("Ixmorrhan still lives", g.Prompt);
+        Assert.IsFalse(g.Descend()); Assert.AreEqual(Mode.Explore, g.Mode); Assert.AreEqual(Game.MachineLockedMessage, g.Message);
+        g.UseAction(); Assert.AreEqual(Mode.Explore, g.Mode, "USE on the locked machine does nothing but explain");
+        Assert.AreEqual("Ixmorrhan still lives. The machine won't answer.", g.Message);
+        g.Level.Monsters.Find(m => m.IsBoss).Hp = 0;
+        Assert.IsFalse(g.BossAlive); Assert.AreEqual("BEAM", g.UseLabel);
+        Assert.IsTrue(g.Descend()); Assert.AreEqual(Mode.Victory, g.Mode);
+    }
+
+    [TestCase(Difficulty.Stargazer)] [TestCase(Difficulty.Abductee)] [TestCase(Difficulty.Specimen)] [TestCase(Difficulty.Doomed)]
+    public void UfoCrossSectionGeometry(Difficulty diff)
+    {
+        int n = GameData.DeckCount(diff); int H = 1000, W = 720;
+        float prev = ShipView.Core.Y0;
+        for (int d = 1; d <= n; d++)
+        {
+            var (y0, y1) = ShipView.Band(d, n);
+            Assert.AreEqual(prev, y0, 1e-5f, "bands stacked with no gaps, deck 1 at the top"); prev = y1;
+            Assert.GreaterOrEqual((y1 - y0) * H, 8.5f, "even 50 decks get visible bands");
+        }
+        Assert.AreEqual(ShipView.Core.Y1, prev, 1e-4f);
+        var labels = ShipView.LabelDecks(n);
+        Assert.AreEqual(1, labels[0]); Assert.AreEqual(n, labels[labels.Count - 1]);
+        if (n <= 10) Assert.AreEqual(n, labels.Count); else { foreach (var k in labels) Assert.IsTrue(k == 1 || k == n || k % 5 == 0); Assert.AreEqual(n / 5 + 1 + (n % 5 == 0 ? 0 : 1), labels.Count); }
+        // Label boxes (min height 0.032) never overlap each other.
+        for (int i = 1; i < labels.Count; i++) { var (a0, a1) = ShipView.Band(labels[i - 1], n); var (b0, b1) = ShipView.Band(labels[i], n); Assert.GreaterOrEqual((b0 + b1) / 2 - (a0 + a1) / 2, 0.032f - 1e-4f, $"labels {labels[i - 1]} and {labels[i]} overlap"); }
+        // Hull encloses the cutaway; Earth below the ship.
+        for (float u = ShipView.Core.X0; u <= ShipView.Core.X1; u += 0.01f) { Assert.Less(ShipView.HullTop(u), ShipView.Core.Y0); Assert.Greater(ShipView.HullBottom(u), ShipView.Core.Y1); }
+        Assert.Greater(ShipView.YouY(0, n), ShipView.HullBottom(0.5f), "backyard YOU sits down on Earth");
+        Assert.AreEqual((ShipView.Band(n, n).y0 + ShipView.Band(n, n).y1) / 2, ShipView.YouY(n, n), 1e-5f);
+        // Render: deterministic, cleared decks lit brighter than unvisited ones, Earth blue at the bottom.
+        int depth = System.Math.Max(2, n / 2);
+        var a = ShipView.Render(n, depth, W, H); var b = ShipView.Render(n, depth, W, H); CollectionAssert.AreEqual(a, b);
+        float Lum(uint[] px, int deck) { var (y0, y1) = ShipView.Band(deck, n); double s = 0; int c = 0; for (int y = (int)(y0 * H) + 1; y < (int)(y1 * H) - 1; y++) for (int x = (int)(ShipView.Core.X0 * W) + 8; x < (int)(ShipView.Core.X1 * W) - 8; x++) { uint p = px[y * W + x]; s += ((p >> 16) & 255) + ((p >> 8) & 255) + (p & 255); c++; } return (float)(s / System.Math.Max(1, c)); }
+        Assert.Greater(Lum(a, 1), Lum(a, n) * 1.3f, "cleared decks are lit");
+        uint e = a[(H - 5) * W + W / 2]; Assert.Greater(e & 255, (e >> 16) & 255, "Earth below is blue");
+    }
+
+    [Test]
+    public void UfoOverlayTogglesAndCounts()
+    {
+        var g = new Game(2); g.Start(Difficulty.Abductee);
+        Assert.AreEqual(20, g.DecksToHome);
+        g.ToggleUfo(); Assert.IsTrue(g.UfoOpen); g.ToggleUfo(); Assert.IsFalse(g.UfoOpen, "tap again closes");
+        g.Abduct(); g.Level.Monsters.Clear(); Assert.AreEqual(19, g.DecksToHome);
+        g.ToggleUfo(); float px = g.PX, py = g.PY; Run(g, 1, 1, 1f); Assert.AreEqual(px, g.PX); Assert.AreEqual(py, g.PY, "joystick paused");
+        g.ToggleMap(); Assert.IsFalse(g.UfoOpen); Assert.IsTrue(g.MapOpen, "one overlay at a time");
+        g.ToggleUfo(); g.CloseOverlays(); Assert.IsFalse(g.OverlayOpen, "X / outside closes");
+    }
+
+    [TestCase(20, 7), TestCase(50, 23), Explicit("writes UFO preview")]
+    public void DumpUfo(int n, int depth)
+    {
+        int W = 720, H = 1000; var px = ShipView.Render(n, depth, W, H);
+        var bytes = new List<byte>(System.Text.Encoding.ASCII.GetBytes($"P6\n{W} {H}\n255\n"));
+        foreach (var c in px) { bytes.Add((byte)(c >> 16)); bytes.Add((byte)(c >> 8)); bytes.Add((byte)c); }
+        System.IO.File.WriteAllBytes($"/tmp/ufo_{n}.ppm", bytes.ToArray());
+    }
+
     [Test, Explicit("dumps layout regions for the preview PNG")]
     public void DumpLayout()
     {
         int w = 1080, h = 2250; var sb = new System.Text.StringBuilder();
         void A(string n, Region r) => sb.AppendLine($"{n} {r.X0} {r.Y0} {r.X1} {r.Y1}");
         A("HUD", UiLayout.Hud(w, h)); A("MAP", UiLayout.Map(w, h)); A("RING", UiLayout.Ring(w, h)); A("HELP", UiLayout.HelpButton(w, h)); A("DECK", UiLayout.DeckText(w, h));
-        A("HEAD", UiLayout.Head(w, h)); A("JOYZONE", UiLayout.JoystickZone(w, h)); A("PROMPT", UiLayout.Prompt(w, h)); A("FOE", UiLayout.FoeBar(w, h));
+        A("HEAD", UiLayout.Head(w, h)); A("UFO", UiLayout.UfoButton(w, h)); A("WPN", UiLayout.WeaponsButton(w, h)); A("JOYZONE", UiLayout.JoystickZone(w, h)); A("PROMPT", UiLayout.Prompt(w, h)); A("FOE", UiLayout.FoeBar(w, h));
         foreach (ActionButton b in System.Enum.GetValues(typeof(ActionButton))) A("BTN_" + b, UiLayout.Button(b, w, h));
         sb.AppendLine($"JOYR {UiLayout.JoystickRadiusPx(w, h)} 0 0 0");
         for (int i = 0; i < 8; i++) { var (x, y) = UiLayout.SlotCentre(i); sb.AppendLine($"SLOT {x} {y} {UiLayout.SlotSize} {UiLayout.HubHalf}"); }
