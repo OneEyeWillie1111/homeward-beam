@@ -14,8 +14,10 @@ namespace HomewardBeam
     {
         Game _game; ViewRenderer _view; Texture2D _tex; Color32[] _buf;
         AudioSource _audio; readonly Dictionary<Sfx, AudioClip> _clips = new Dictionary<Sfx, AudioClip>();
-        Font _font; RectTransform _root, _viewRect, _hudRect, _padRect, _titlePanel;
-        Text _hud, _msg, _ring, _titleText;
+        Font _font; RectTransform _root, _viewRect, _hudRect, _ringRect, _padRect, _titlePanel;
+        readonly Image[] _slotBg = new Image[InventoryRing.Capacity]; readonly RawImage[] _slotIcon = new RawImage[InventoryRing.Capacity]; readonly Text[] _slotText = new Text[InventoryRing.Capacity];
+        RawImage _heldIcon; Text _heldText; readonly Dictionary<ItemKind, Texture2D> _icons = new Dictionary<ItemKind, Texture2D>();
+        Text _hud, _msg, _titleText;
         readonly List<Button> _combatButtons = new List<Button>(), _exploreButtons = new List<Button>();
         Vector2Int _lastScreen;
         static bool _spawned;
@@ -75,9 +77,9 @@ namespace HomewardBeam
             var fit = screen.AddComponent<AspectRatioFitter>();
             fit.aspectMode = AspectRatioFitter.AspectMode.FitInParent; fit.aspectRatio = (float)ViewRenderer.W / ViewRenderer.H;
             _hudRect = Panel(_root, "Hud", new Color(0.05f, 0.07f, 0.1f, 0.95f));
-            _hud = Label(_hudRect, "Stats", 30, TextAnchor.UpperLeft, new Vector2(0, 0.62f), new Vector2(1, 1));
-            _ring = Label(_hudRect, "Ring", 28, TextAnchor.MiddleLeft, new Vector2(0, 0.36f), new Vector2(1, 0.62f));
-            _msg = Label(_hudRect, "Msg", 26, TextAnchor.UpperLeft, new Vector2(0, 0), new Vector2(1, 0.36f));
+            _hud = Label(_hudRect, "Stats", 30, TextAnchor.UpperLeft, new Vector2(0, 0.5f), new Vector2(1, 1));
+            _msg = Label(_hudRect, "Msg", 26, TextAnchor.UpperLeft, new Vector2(0, 0), new Vector2(1, 0.5f));
+            BuildRing();
             _msg.color = new Color(0.6f, 1f, 0.8f);
             _padRect = Panel(_root, "Pad", new Color(0.08f, 0.1f, 0.14f, 1));
 
@@ -117,6 +119,54 @@ namespace HomewardBeam
             }
         }
 
+        // ---------- Ring inventory: 8 tappable slots on a circle, held item in the middle ----------
+        void BuildRing()
+        {
+            foreach (ItemKind k in System.Enum.GetValues(typeof(ItemKind)))
+            {
+                var px = Sprites.ItemIcon(k); var t = new Texture2D(Sprites.N, Sprites.N, TextureFormat.RGBA32, false) { filterMode = FilterMode.Point };
+                var cols = new Color32[Sprites.N * Sprites.N];
+                for (int y = 0; y < Sprites.N; y++) for (int x = 0; x < Sprites.N; x++)
+                { uint c = px[y * Sprites.N + x]; cols[(Sprites.N - 1 - y) * Sprites.N + x] = new Color32((byte)(c >> 16), (byte)(c >> 8), (byte)c, (byte)(c == 0 ? 0 : 255)); }
+                t.SetPixels32(cols); t.Apply(false); _icons[k] = t;
+            }
+            _ringRect = Panel(_root, "RingArea", new Color(0.06f, 0.08f, 0.12f, 1));
+            var sq = Panel(_ringRect, "RingSquare", new Color(0, 0, 0, 0));
+            var fit = sq.gameObject.AddComponent<AspectRatioFitter>(); fit.aspectMode = AspectRatioFitter.AspectMode.FitInParent; fit.aspectRatio = 1;
+            var circle = Panel(sq, "RingBand", new Color(0.15f, 0.35f, 0.45f, 0.35f)); Set(circle, new Vector2(0.08f, 0.08f), new Vector2(0.92f, 0.92f)); circle.GetComponent<Image>().raycastTarget = false;
+            var hub = Panel(sq, "Held", new Color(0.1f, 0.14f, 0.2f, 1)); Set(hub, new Vector2(0.5f - UiLayout.HubHalf, 0.5f - UiLayout.HubHalf), new Vector2(0.5f + UiLayout.HubHalf, 0.5f + UiLayout.HubHalf)); hub.GetComponent<Image>().raycastTarget = false;
+            _heldIcon = new GameObject("HeldIcon", typeof(RectTransform)).AddComponent<RawImage>(); _heldIcon.transform.SetParent(hub, false);
+            Set((RectTransform)_heldIcon.transform, new Vector2(0.25f, 0.42f), new Vector2(0.75f, 0.95f)); _heldIcon.raycastTarget = false;
+            _heldText = Label(hub, "HeldText", 26, TextAnchor.LowerCenter, new Vector2(0, 0), new Vector2(1, 0.45f));
+            for (int i = 0; i < InventoryRing.Capacity; i++)
+            {
+                int slot = i; var (cx, cy) = UiLayout.SlotCentre(i); float h = UiLayout.SlotSize / 2;
+                var r = Panel(sq, "Slot" + i, new Color(0.2f, 0.26f, 0.34f, 1)); Set(r, new Vector2(cx - h, cy - h), new Vector2(cx + h, cy + h));
+                _slotBg[i] = r.GetComponent<Image>();
+                var b = r.gameObject.AddComponent<Button>(); b.onClick.AddListener(() => { _game.RingSelect(slot); Refresh(); });
+                var ic = new GameObject("Icon", typeof(RectTransform)).AddComponent<RawImage>(); ic.transform.SetParent(r, false);
+                Set((RectTransform)ic.transform, new Vector2(0.15f, 0.3f), new Vector2(0.85f, 0.95f)); ic.raycastTarget = false; _slotIcon[i] = ic;
+                _slotText[i] = Label(r, "Name", 18, TextAnchor.LowerCenter, new Vector2(0, 0), new Vector2(1, 0.35f));
+                ((RectTransform)_slotText[i].transform).offsetMin = new Vector2(2, 1); ((RectTransform)_slotText[i].transform).offsetMax = new Vector2(-2, -1);
+            }
+        }
+
+        void RefreshRing()
+        {
+            var r = _game.Ring;
+            for (int i = 0; i < InventoryRing.Capacity; i++)
+            {
+                var it = i < r.Count ? r.Items[i] : null; bool sel = it != null && i == r.Index;
+                _slotBg[i].color = sel ? new Color(0.95f, 0.75f, 0.2f, 1) : it != null ? new Color(0.2f, 0.26f, 0.34f, 1) : new Color(0.12f, 0.14f, 0.18f, 1);
+                _slotIcon[i].enabled = it != null; if (it != null) _slotIcon[i].texture = _icons[it.Kind];
+                _slotText[i].text = it == null ? "" : Short(it.Name); _slotText[i].color = sel ? Color.black : Color.white;
+            }
+            var cur = r.Current;
+            _heldIcon.enabled = cur != null; if (cur != null) _heldIcon.texture = _icons[cur.Kind];
+            _heldText.text = cur == null ? "Empty" : $"{cur.Name}\n{cur.Kind}{(cur.Kind == ItemKind.Key ? "" : " +" + cur.Power)}";
+        }
+        static string Short(string n) { int sp = n.LastIndexOf(' '); return sp > 0 ? n.Substring(sp + 1) : n; }
+
         RectTransform Panel(Transform parent, string name, Color c)
         {
             var go = new GameObject(name, typeof(RectTransform)); go.transform.SetParent(parent, false);
@@ -149,20 +199,15 @@ namespace HomewardBeam
         void Layout()
         {
             bool portrait = Screen.height >= Screen.width;
-            if (portrait)
-            {
-                Set(_viewRect, new Vector2(0, 0.58f), new Vector2(1, 1));
-                Set(_hudRect, new Vector2(0, 0.40f), new Vector2(1, 0.58f));
-                Set(_padRect, new Vector2(0, 0), new Vector2(1, 0.40f));
-            }
-            else
-            {
-                Set(_viewRect, new Vector2(0, 0), new Vector2(0.58f, 1));
-                Set(_hudRect, new Vector2(0.58f, 0.58f), new Vector2(1, 1));
-                Set(_padRect, new Vector2(0.58f, 0), new Vector2(1, 0.58f));
-            }
+            // Keep everything inside the safe area (punch-hole camera / gesture bar on the S22+).
+            var sa = Screen.safeArea; float sw = Mathf.Max(1, Screen.width), sh = Mathf.Max(1, Screen.height);
+            _root.anchorMin = new Vector2(sa.xMin / sw, sa.yMin / sh); _root.anchorMax = new Vector2(sa.xMax / sw, sa.yMax / sh);
+            _root.offsetMin = _root.offsetMax = Vector2.zero;
+            Apply(_viewRect, UiLayout.View(portrait)); Apply(_hudRect, UiLayout.Hud(portrait));
+            Apply(_ringRect, UiLayout.Ring(portrait)); Apply(_padRect, UiLayout.Pad(portrait));
             _lastScreen = new Vector2Int(Screen.width, Screen.height);
         }
+        static void Apply(RectTransform r, Region g) => Set(r, new Vector2(g.X0, g.Y0), new Vector2(g.X1, g.Y1));
         static void Set(RectTransform r, Vector2 min, Vector2 max) { r.anchorMin = min; r.anchorMax = max; r.offsetMin = r.offsetMax = Vector2.zero; }
 
         void Update()
@@ -215,10 +260,8 @@ namespace HomewardBeam
             if (g.Level == null) return;
             string foe = g.Foe != null ? $"   FOE: {g.Foe.Name} {Mathf.Max(0, g.Foe.Hp)}/{g.Foe.MaxHp}" : "";
             _hud.text = $"WAR {g.War:00}/{g.WarMax:00}   SPIRIT {g.Spirit:00}/{g.SpiritMax:00}\nDeck {g.Depth}/{GameData.LevelCount}  Facing {g.Facing}  Lives {g.Reincarnations + 1}{foe}";
-            var r = g.Ring;
-            _ring.text = r.Count == 0 ? "Ring: (empty)" : $"Ring ({r.Index + 1}/{r.Count}):  {Name(r.Peek(-1))}  ‹ [{r.Current}] ›  {Name(r.Peek(1))}";
+            RefreshRing();
             _msg.text = g.Message;
         }
-        static string Name(Item i) => i == null ? "" : i.Name;
     }
 }

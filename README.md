@@ -18,7 +18,7 @@ All names, creatures, sprites and sounds are original. The sprites are drawn in 
   - **Grays**, keepers of the symbiote hosts (Gray Hostwarden and Gray Symbiote-Tender)
   - **Saurians**, the Serpent Lords (lizard people): Saurian Fang-Guard (warrior caste) and Saurian Brood-Mother (queen mother)
 - **Combat:** walking into a chamber's alien starts a turn-based fight. You can ATTACK with the selected ring item, USE an item (for example, eat food), or FLEE (60% chance, and impossible against the boss). The alien strikes back after each of your actions.
-- **Ring inventory:** you have 8 slots arranged in a circle. Use ‹RING and RING› to rotate through weapons, armor, psionic items, food and access cards. Armor protects you while it's anywhere in the ring.
+- **Ring inventory:** a circle of 8 slots is always on screen (below the view in portrait, to the right of it in landscape). Each slot shows its item's icon and name. The item you're holding is highlighted in gold and shown large in the middle of the ring. **Tap any slot** to hold that item, or use ‹RING and RING› to rotate through weapons, armor, psionic items, food and access cards. Armor protects you while it's anywhere in the ring.
 - **Supply lockers:** these need an **Access Card**. Face a locker and tap OPEN to get a "Prime" item.
 - **Difficulty** (chosen at the start): Stargazer, Abductee, Specimen or Doomed. Harder settings give you less starting health and stronger aliens.
 - **Re-cloning (reincarnation):** when you die, you wake on deck 1 with your maximum War and Spirit cut to 85% and a fresh starter kit.

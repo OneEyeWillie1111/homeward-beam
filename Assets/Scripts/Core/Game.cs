@@ -115,6 +115,7 @@ namespace HomewardBeam.Core
 
         public void DropCurrent() { if (Mode != Mode.Explore || Ring.Current == null) return; Message = $"Dropped {Ring.Current.Name}."; Ring.RemoveCurrent(); Play(Sfx.Select); }
         public void RingNext() { Ring.Next(); Play(Sfx.Select); }
+        public bool RingSelect(int i) { if (!Ring.Select(i)) return false; Message = $"Holding {Ring.Current}."; Play(Sfx.Select); return true; }
         public void RingPrev() { Ring.Prev(); Play(Sfx.Select); }
 
         // ---------- Combat ----------

@@ -184,4 +184,37 @@ public class CoreTests
         g.EnterLevel(10); var b = g.Level.Monsters.Find(m => m.IsBoss); g.X = b.X; g.Y = b.Y + 2; g.Facing = Dir.North;
         g.Level.Tiles[g.X, g.Y] = Tile.Floor; g.Level.Tiles[g.X, g.Y - 1] = Tile.Floor; Dump("boss");
     }
+
+    [Test]
+    public void RingSlotsSelectByTap()
+    {
+        var g = new Game(2); g.Start(Difficulty.Abductee);
+        Assert.AreEqual(3, g.Ring.Count);
+        Assert.IsTrue(g.RingSelect(2)); Assert.AreEqual(2, g.Ring.Index); Assert.AreEqual(ItemKind.Food, g.Ring.Current.Kind);
+        Assert.IsFalse(g.RingSelect(5), "empty slot can't be held"); Assert.AreEqual(2, g.Ring.Index);
+        g.RingNext(); Assert.AreEqual(0, g.Ring.Index);
+    }
+
+    [TestCase(2340, 1080)] [TestCase(1080, 2340)] [TestCase(1920, 1080)] [TestCase(1080, 1920)]
+    public void RingLayoutFitsS22PlusBothOrientations(int w, int h)
+    {
+        bool portrait = h >= w;
+        var regs = new[] { UiLayout.View(portrait), UiLayout.Hud(portrait), UiLayout.Ring(portrait), UiLayout.Pad(portrait) };
+        float area = 0;
+        foreach (var r in regs) { Assert.Less(r.X0, r.X1); Assert.Less(r.Y0, r.Y1); Assert.GreaterOrEqual(r.X0, 0); Assert.LessOrEqual(r.Y1, 1); area += (r.X1 - r.X0) * (r.Y1 - r.Y0); }
+        Assert.AreEqual(1f, area, 1e-4f, "panels tile the screen with no overlap");
+        for (int i = 0; i < regs.Length; i++) for (int j = i + 1; j < regs.Length; j++)
+        { var a = regs[i]; var b = regs[j]; bool overlap = a.X0 < b.X1 && b.X0 < a.X1 && a.Y0 < b.Y1 && b.Y0 < a.Y1; Assert.IsFalse(overlap, $"regions {i},{j} overlap"); }
+        float side = UiLayout.RingSquarePx(w, h);
+        Assert.GreaterOrEqual(side, 380, "ring area big enough");
+        Assert.GreaterOrEqual(side * UiLayout.SlotSize, 80, "each slot is at least 80px (about 6.5 mm on an S22+) to tap");
+        for (int i = 0; i < InventoryRing.Capacity; i++)
+        {
+            var (x, y) = UiLayout.SlotCentre(i); float hs = UiLayout.SlotSize / 2;
+            Assert.GreaterOrEqual(x - hs, 0); Assert.LessOrEqual(x + hs, 1); Assert.GreaterOrEqual(y - hs, 0); Assert.LessOrEqual(y + hs, 1);
+            Assert.IsTrue(System.Math.Abs(x - 0.5f) > UiLayout.HubHalf + hs - 0.001f || System.Math.Abs(y - 0.5f) > UiLayout.HubHalf + hs - 0.001f, "slot clear of the held-item hub");
+            for (int j = i + 1; j < InventoryRing.Capacity; j++)
+            { var (x2, y2) = UiLayout.SlotCentre(j); Assert.IsTrue(System.Math.Abs(x - x2) >= UiLayout.SlotSize - 1e-4 || System.Math.Abs(y - y2) >= UiLayout.SlotSize - 1e-4, $"slots {i},{j} overlap"); }
+        }
+    }
 }

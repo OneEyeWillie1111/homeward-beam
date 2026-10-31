@@ -14,6 +14,8 @@ namespace HomewardBeam.Core
         public bool IsFull => _items.Count >= Capacity;
 
         public bool Add(Item it) { if (IsFull || it == null) return false; _items.Add(it); return true; }
+        /// <summary>Select a slot directly (tap on the ring). Returns false for an empty slot.</summary>
+        public bool Select(int i) { if (i < 0 || i >= _items.Count) return false; Index = i; return true; }
         public void Next() { if (_items.Count > 0) Index = (Index + 1) % _items.Count; }
         public void Prev() { if (_items.Count > 0) Index = (Index - 1 + _items.Count) % _items.Count; }
         public void RemoveCurrent() { if (_items.Count == 0) return; _items.RemoveAt(Index); if (Index >= _items.Count) Index = 0; }
