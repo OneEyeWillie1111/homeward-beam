@@ -24,7 +24,7 @@ namespace Abduction
         readonly Dictionary<int, Transform> _items = new Dictionary<int, Transform>();
         readonly Dictionary<Chest, Transform> _chests = new Dictionary<Chest, Transform>();
         readonly List<Transform> _spinners = new List<Transform>();
-        Light _lamp; ReflectionProbe _probe;
+        Light _lamp; ReflectionProbe _probe; Light _key, _rim;
         Transform _backyard, _head; Species _headSpecies = (Species)(-1); Light _moon;
         Vector3 _camPos; float _camYaw; float _shake; bool _snap = true; int _lastWar, _lastSpirit;
         float _probeTimer;
@@ -35,11 +35,11 @@ namespace Abduction
         public void Init(Camera cam)
         {
             Cam = cam;
-            _sphere = ProcGen.Sphere(); _cyl = ProcGen.Cylinder(); _box = ProcGen.Box();
-            _wallMat = ProcGen.Metal(Color.white, 0.85f, 0.75f, ProcGen.MetalAlbedo(256, new Color(0.62f, 0.68f, 0.74f), 3, false), ProcGen.MetalNormal(256, 3, false));
+            _sphere = ProcGen.Sphere(); _cyl = ProcGen.Cylinder(); _box = ProcGen.Box(); _cone = ProcGen.Cone();
+            _wallMat = ProcGen.Metal(Color.white, 0.85f, 0.75f, ProcGen.MetalAlbedo(256, new Color(0.6f, 0.62f, 0.64f), 3, false), ProcGen.MetalNormal(256, 3, false));
             _floorMat = ProcGen.Metal(Color.white, 0.9f, 0.6f, ProcGen.MetalAlbedo(256, new Color(0.36f, 0.4f, 0.46f), 5, true), ProcGen.MetalNormal(256, 5, true, 3.5f));
             _ceilMat = ProcGen.Metal(Color.white, 0.7f, 0.45f, ProcGen.MetalAlbedo(128, new Color(0.25f, 0.28f, 0.33f), 9, true), ProcGen.MetalNormal(128, 9, true));
-            _stripMat = ProcGen.Glow(new Color(0.25f, 0.85f, 1f), 2.2f);
+            _stripMat = ProcGen.Glow(new Color(0.55f, 0.75f, 0.8f), 1.6f);
             _doorMat = ProcGen.Metal(new Color(0.72f, 0.58f, 0.32f), 0.95f, 0.8f, null, ProcGen.MetalNormal(128, 11, false));
             _teleMat = ProcGen.Glow(new Color(0.1f, 0.9f, 1f), 3f);
             _homeMat = ProcGen.Glow(new Color(1f, 0.78f, 0.25f), 3f);
@@ -47,12 +47,15 @@ namespace Abduction
             _trimMat = ProcGen.Glow(new Color(1f, 0.7f, 0.2f), 1.6f);
 
             RenderSettings.fog = true; RenderSettings.fogMode = FogMode.ExponentialSquared; RenderSettings.fogDensity = 0.16f;
-            RenderSettings.fogColor = new Color(0.02f, 0.05f, 0.08f);
+            RenderSettings.fogColor = new Color(0.025f, 0.025f, 0.03f);
             RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
-            RenderSettings.ambientSkyColor = new Color(0.12f, 0.16f, 0.22f); RenderSettings.ambientEquatorColor = new Color(0.07f, 0.1f, 0.13f); RenderSettings.ambientGroundColor = new Color(0.03f, 0.04f, 0.05f);
+            RenderSettings.ambientSkyColor = new Color(0.09f, 0.1f, 0.12f); RenderSettings.ambientEquatorColor = new Color(0.06f, 0.06f, 0.065f); RenderSettings.ambientGroundColor = new Color(0.07f, 0.04f, 0.02f);
+            // Key + rim: a soft warm key from above-front and a cool rim from behind the creatures (relative to the player's view, updated per frame).
+            _key = new GameObject("KeyLight").AddComponent<Light>(); _key.type = LightType.Directional; _key.intensity = 0.45f; _key.color = new Color(1f, 0.82f, 0.6f); _key.shadows = LightShadows.None;
+            _rim = new GameObject("RimLight").AddComponent<Light>(); _rim.type = LightType.Directional; _rim.intensity = 0.9f; _rim.color = new Color(0.7f, 0.8f, 0.95f); _rim.shadows = LightShadows.None;
             RenderSettings.defaultReflectionMode = UnityEngine.Rendering.DefaultReflectionMode.Custom;
 
-            _lamp = new GameObject("HeadLamp").AddComponent<Light>(); _lamp.type = LightType.Point; _lamp.range = 5.5f; _lamp.intensity = 1.6f;
+            _lamp = new GameObject("HeadLamp").AddComponent<Light>(); _lamp.type = LightType.Point; _lamp.range = 5.5f; _lamp.intensity = 1.3f;
             _lamp.color = new Color(1f, 0.95f, 0.88f); _lamp.renderMode = LightRenderMode.ForcePixel; _lamp.shadows = LightShadows.None;
             _probe = new GameObject("ReflectionProbe").AddComponent<ReflectionProbe>();
             _probe.mode = UnityEngine.Rendering.ReflectionProbeMode.Realtime; _probe.refreshMode = UnityEngine.Rendering.ReflectionProbeRefreshMode.ViaScripting;
@@ -153,36 +156,126 @@ namespace Abduction
         }
 
         /// <summary>Original smooth alien figure built from ellipsoids: body, oversized head with glowing eyes; extras per tier.</summary>
+        // ---------------- Aliens (style targets: classic grays; olive reptilian with amber underlight) ----------------
+        Material _grayEye, _darkSlit, _sauriEye, _sauriRim;
+        readonly Dictionary<string, Material> _skinCache = new Dictionary<string, Material>();
+        Material Skin(string key, System.Func<Material> make) { if (!_skinCache.TryGetValue(key, out var m)) _skinCache[key] = m = make(); return m; }
+
         Transform MakeMonster(Monster m)
         {
-            var k = m.Kind; int idx = System.Array.IndexOf(GameData.Monsters, k);
+            var k = m.Kind;
             var root = new GameObject(k.Name).transform; root.SetParent(_levelRoot, false); root.position = W(m.X, m.Y);
+            var fig = new GameObject("Figure").transform; fig.SetParent(root, false);
+            bool saurian = k.Name.StartsWith("Saurian") || m.IsBoss || k.Name.StartsWith("Half-Scale");
+            bool grayLike = k.Name.StartsWith("Gray") || k.Name.StartsWith("Pale") || k.Name.StartsWith("Shade");
+            if (_grayEye == null)
+            {
+                _grayEye = ProcGen.Metal(new Color(0.01f, 0.01f, 0.015f), 0.2f, 0.97f);
+                _darkSlit = ProcGen.Metal(new Color(0.05f, 0.04f, 0.04f), 0f, 0.3f);
+                _sauriEye = ProcGen.Glow(new Color(1f, 0.55f, 0.12f), 2.6f);
+                _sauriRim = ProcGen.Glow(new Color(1f, 0.78f, 0.3f), 1.2f);
+            }
+            if (saurian) BuildSaurian(fig, m);
+            else if (grayLike) BuildGray(fig, m);
+            else BuildCreature(fig, m);
+            return root;
+        }
+
+        /// <summary>Classic gray: bulbous cranium tapering to a narrow chin, huge glossy black almond eyes, nose slits, tiny mouth,
+        /// long thin neck, gaunt torso with rib/clavicle relief, long thin arms. Variants hunch differently.</summary>
+        void BuildGray(Transform fig, Monster m)
+        {
+            var k = m.Kind; bool pale = k.Name.StartsWith("Pale"), shade = k.Name.StartsWith("Shade");
+            Color tone = pale ? new Color(0.86f, 0.88f, 0.9f) : shade ? new Color(0.09f, 0.09f, 0.11f) : new Color(0.62f, 0.66f, 0.7f);
+            var skin = Skin("gray" + tone, () => ProcGen.Skin(ProcGen.MottleAlbedo(tone, 51), ProcGen.GaunterNormal(), null, 0.05f, shade ? 0.8f : 0.42f));
+            int variant = (k.Name.Length + m.X + m.Y) % 3;
+            float height = pale ? 1.12f : 0.95f + k.Tier * 0.02f;
+            fig.localScale = Vector3.one * height;
+            float hunch = variant == 0 ? 0f : variant == 1 ? 14f : 26f;
+            // Legs and pelvis
+            foreach (float sx in new[] { -1f, 1f }) Prim(fig, _sphere, skin, new Vector3(sx * 0.07f, 0.22f, 0), new Vector3(0.07f, 0.48f, 0.08f), "Leg");
+            Prim(fig, _sphere, skin, new Vector3(0, 0.46f, 0), new Vector3(0.2f, 0.14f, 0.13f), "Pelvis");
+            var spine = new GameObject("Spine").transform; spine.SetParent(fig, false); spine.localPosition = new Vector3(0, 0.5f, 0); spine.localRotation = Quaternion.Euler(-hunch * 0.5f, 0, 0);
+            Prim(spine, _sphere, skin, new Vector3(0, 0.2f, 0), new Vector3(0.22f, 0.42f, 0.13f), "Torso");         // gaunt, ribs in the normal map
+            Prim(spine, _sphere, skin, new Vector3(0, 0.39f, -0.01f), new Vector3(0.3f, 0.06f, 0.1f), "Clavicles");
+            foreach (float sx in new[] { -1f, 1f })
+            {
+                var arm = new GameObject("Arm").transform; arm.SetParent(spine, false); arm.localPosition = new Vector3(sx * 0.15f, 0.38f, 0); arm.localRotation = Quaternion.Euler(-hunch * 0.3f, 0, sx * 4f);
+                Prim(arm, _sphere, skin, new Vector3(0, -0.2f, 0), new Vector3(0.05f, 0.42f, 0.05f), "UpperArm");
+                Prim(arm, _sphere, skin, new Vector3(0, -0.52f, -0.02f), new Vector3(0.04f, 0.36f, 0.04f), "Forearm");
+                for (int f = 0; f < 3; f++) Prim(arm, _sphere, skin, new Vector3((f - 1) * 0.012f, -0.75f, -0.02f), new Vector3(0.012f, 0.09f, 0.012f), "Finger");
+            }
+            var neck = new GameObject("Neck").transform; neck.SetParent(spine, false); neck.localPosition = new Vector3(0, 0.41f, 0); neck.localRotation = Quaternion.Euler(-hunch, 0, 0);
+            Prim(neck, _cyl, skin, new Vector3(0, 0.09f, 0), new Vector3(0.05f, 0.18f, 0.05f), "NeckStalk");
+            var head = new GameObject("Head").transform; head.SetParent(neck, false); head.localPosition = new Vector3(0, 0.25f, 0); head.localRotation = Quaternion.Euler(hunch * 0.6f, 0, 0);
+            Prim(head, _sphere, skin, new Vector3(0, 0.08f, 0.02f), new Vector3(0.3f, 0.3f, 0.32f), "Cranium");          // big bulb
+            var chin = Prim(head, _cone, skin, new Vector3(0, -0.07f, -0.05f), new Vector3(0.18f, 0.2f, 0.16f), "Jaw"); chin.localRotation = Quaternion.Euler(180, 0, 0);
+            foreach (float sx in new[] { -1f, 1f })
+            {
+                var eye = Prim(head, _sphere, _grayEye, new Vector3(sx * 0.068f, 0.0f, -0.12f), new Vector3(0.085f, 0.05f, 0.05f), "Eye");   // huge almond
+                eye.localRotation = Quaternion.Euler(0, sx * 18f, sx * -22f);
+                Prim(head, _sphere, _darkSlit, new Vector3(sx * 0.008f, -0.07f, -0.13f), new Vector3(0.006f, 0.012f, 0.006f), "NoseSlit");
+            }
+            Prim(head, _box, _darkSlit, new Vector3(0, -0.11f, -0.105f), new Vector3(0.035f, 0.004f, 0.01f), "Mouth");
+        }
+
+        /// <summary>Reptilian: olive scaly skin, smooth elongated dome head, heavy brow, narrow amber slit eyes with gold rims,
+        /// flat nose slits, long lipless jaw, thick neck and shoulders, warm amber underlight on throat and chest.</summary>
+        void BuildSaurian(Transform fig, Monster m)
+        {
+            var k = m.Kind; bool boss = m.IsBoss, hybrid = k.Name.StartsWith("Half-Scale");
+            Color tone = boss ? new Color(0.33f, 0.4f, 0.2f) : hybrid ? new Color(0.5f, 0.55f, 0.4f) : new Color(0.38f, 0.45f, 0.25f);
+            var skin = Skin("sauri" + tone + boss, () => ProcGen.Skin(ProcGen.ScaleAlbedo(tone, 61), ProcGen.ScaleNormal(61), ProcGen.UnderglowMap(), 0.05f, 0.5f, new Color(1f, 0.5f, 0.12f) * (boss ? 1.1f : 0.8f)));
+            float s = boss ? 1.5f : hybrid ? 0.92f : 1.05f + (k.Tier - 4) * 0.05f;
+            fig.localScale = Vector3.one * s;
+            foreach (float sx in new[] { -1f, 1f }) Prim(fig, _sphere, skin, new Vector3(sx * 0.11f, 0.24f, 0), new Vector3(0.13f, 0.5f, 0.14f), "Leg");
+            Prim(fig, _sphere, skin, new Vector3(0, 0.47f, 0), new Vector3(0.3f, 0.18f, 0.2f), "Hips");
+            Prim(fig, _sphere, skin, new Vector3(0, 0.72f, 0), new Vector3(0.38f, 0.48f, 0.26f), "Torso");
+            Prim(fig, _sphere, skin, new Vector3(0, 0.9f, 0.02f), new Vector3(0.58f, 0.2f, 0.28f), "Shoulders");      // heavy, muscular
+            foreach (float sx in new[] { -1f, 1f })
+            {
+                Prim(fig, _sphere, skin, new Vector3(sx * 0.3f, 0.72f, 0), new Vector3(0.12f, 0.36f, 0.12f), "UpperArm");
+                Prim(fig, _sphere, skin, new Vector3(sx * 0.32f, 0.45f, -0.04f), new Vector3(0.1f, 0.32f, 0.1f), "Forearm");
+            }
+            Prim(fig, _cyl, skin, new Vector3(0, 1.0f, 0.0f), new Vector3(0.17f, 0.2f, 0.17f), "Neck");                // thick
+            var head = new GameObject("Head").transform; head.SetParent(fig, false); head.localPosition = new Vector3(0, 1.17f, -0.02f); head.localRotation = Quaternion.Euler(8, 0, 0);
+            Prim(head, _sphere, skin, new Vector3(0, 0.04f, 0.03f), new Vector3(0.22f, 0.25f, 0.3f), "Dome");           // smooth, elongated, hairless
+            Prim(head, _sphere, skin, new Vector3(0, -0.06f, -0.09f), new Vector3(0.17f, 0.11f, 0.24f), "Jaw");          // long lipless jaw
+            Prim(head, _sphere, skin, new Vector3(0, 0.035f, -0.1f), new Vector3(0.21f, 0.05f, 0.1f), "Brow");          // heavy brow
+            Prim(head, _box, _darkSlit, new Vector3(0, -0.075f, -0.205f), new Vector3(0.11f, 0.004f, 0.04f), "MouthLine");
+            foreach (float sx in new[] { -1f, 1f })
+            {
+                var rim = Prim(head, _sphere, _sauriRim, new Vector3(sx * 0.068f, 0.005f, -0.135f), new Vector3(0.05f, 0.022f, 0.02f), "EyeRim"); rim.localRotation = Quaternion.Euler(0, sx * 25f, sx * 8f);
+                var eye = Prim(head, _sphere, _sauriEye, new Vector3(sx * 0.069f, 0.005f, -0.142f), new Vector3(0.036f, 0.012f, 0.012f), "Eye"); eye.localRotation = Quaternion.Euler(0, sx * 25f, sx * 8f);
+                Prim(head, _sphere, _darkSlit, new Vector3(sx * 0.016f, -0.03f, -0.205f), new Vector3(0.008f, 0.004f, 0.006f), "NoseSlit");
+            }
+            if (boss)
+            {
+                for (int i = 0; i < 4; i++) Prim(head, _box, _homeMat, new Vector3(0, 0.15f + i * 0.015f, -0.05f + i * 0.07f), new Vector3(0.025f, 0.08f, 0.06f), "Crest");
+                Prim(fig, _sphere, _homeMat, new Vector3(0, 0.82f, -0.14f), new Vector3(0.07f, 0.07f, 0.03f), "Gem");
+            }
+            if (!hybrid) Prim(fig, _sphere, skin, new Vector3(0, 0.25f, 0.22f), new Vector3(0.12f, 0.12f, 0.5f), "Tail");
+        }
+
+        /// <summary>Other castes (insectoid, mantis, Nordic-style herald): the original generic build in a muted palette.</summary>
+        void BuildCreature(Transform fig, Monster m)
+        {
+            var k = m.Kind;
             var col = new Color(((k.Color >> 16) & 255) / 255f, ((k.Color >> 8) & 255) / 255f, (k.Color & 255) / 255f);
-            var skin = ProcGen.Metal(col, 0.15f, 0.65f);
-            var eyeCol = k.Nature == MonsterNature.Spirit ? new Color(0.2f, 1f, 1f) : new Color(1f, 0.25f, 0.15f);
-            float s = m.IsBoss ? 1.45f : 0.75f + k.Tier * 0.07f;
-            var fig = new GameObject("Figure").transform; fig.SetParent(root, false); fig.localScale = Vector3.one * s;
-            bool gray = k.Name.StartsWith("Gray"), mantis = k.Name.StartsWith("Mantis"), saur = k.Name.StartsWith("Saurian") || m.IsBoss;
-            float headW = gray ? 0.36f : mantis ? 0.22f : 0.26f, headH = gray ? 0.32f : mantis ? 0.3f : 0.26f;
-            float bodyH = mantis ? 0.62f : saur ? 0.6f : 0.5f;
-            Prim(fig, _sphere, skin, new Vector3(0, bodyH * 0.55f, 0), new Vector3(saur ? 0.42f : 0.3f, bodyH, saur ? 0.32f : 0.24f), "Body");
-            var head = Prim(fig, _sphere, skin, new Vector3(0, bodyH + headH * 0.35f, 0), new Vector3(headW, headH, headW * (saur ? 1.3f : 1f)), "Head");
-            var eye = ProcGen.Glow(eyeCol, 3f);
-            float ex = gray ? 0.24f : 0.2f, esz = gray ? 0.32f : 0.18f;
-            Prim(head, _sphere, eye, new Vector3(-ex, 0.05f, -0.42f), new Vector3(esz, esz * 0.6f, 0.12f), "EyeL");
-            Prim(head, _sphere, eye, new Vector3(ex, 0.05f, -0.42f), new Vector3(esz, esz * 0.6f, 0.12f), "EyeR");
+            col = Color.Lerp(col, new Color(0.45f, 0.45f, 0.45f), 0.35f);                 // desaturate toward the art direction
+            var skin = Skin("cr" + k.Name, () => ProcGen.Skin(ProcGen.MottleAlbedo(col, k.Name.Length), ProcGen.ScaleNormal(k.Name.Length + 3), null, 0.1f, 0.6f));
+            var eyeCol = k.Nature == MonsterNature.Spirit ? new Color(0.5f, 0.85f, 0.9f) : new Color(1f, 0.55f, 0.15f);
+            fig.localScale = Vector3.one * (0.75f + k.Tier * 0.07f);
+            bool mantis = k.Name.StartsWith("Mantis");
+            float headW = mantis ? 0.22f : 0.26f, headH = mantis ? 0.3f : 0.26f, bodyH = mantis ? 0.62f : 0.5f;
+            Prim(fig, _sphere, skin, new Vector3(0, bodyH * 0.55f, 0), new Vector3(0.3f, bodyH, 0.24f), "Body");
+            var head = Prim(fig, _sphere, skin, new Vector3(0, bodyH + headH * 0.35f, 0), new Vector3(headW, headH, headW), "Head");
+            var eye = ProcGen.Glow(eyeCol, 2.2f);
+            Prim(head, _sphere, eye, new Vector3(-0.2f, 0.05f, -0.42f), new Vector3(0.18f, 0.11f, 0.12f), "EyeL");
+            Prim(head, _sphere, eye, new Vector3(0.2f, 0.05f, -0.42f), new Vector3(0.18f, 0.11f, 0.12f), "EyeR");
             Prim(fig, _sphere, skin, new Vector3(-0.2f, bodyH * 0.6f, -0.05f), new Vector3(0.08f, bodyH * 0.6f, 0.08f), "ArmL");
             Prim(fig, _sphere, skin, new Vector3(0.2f, bodyH * 0.6f, -0.05f), new Vector3(0.08f, bodyH * 0.6f, 0.08f), "ArmR");
-            if (saur)
-            {
-                var crest = m.IsBoss ? _homeMat : ProcGen.Glow(new Color(0.9f, 0.2f, 0.2f), 1.2f);
-                for (int i = 0; i < 3; i++) Prim(head, _box, crest, new Vector3(0, 0.45f + i * 0.06f, 0.1f + i * 0.12f), new Vector3(0.08f, 0.2f, 0.12f), "Crest");
-                Prim(fig, _sphere, skin, new Vector3(0, 0.12f, 0.25f), new Vector3(0.12f, 0.12f, 0.5f), "Tail");
-            }
             if (mantis) { Prim(fig, _sphere, skin, new Vector3(-0.17f, bodyH * 0.9f, -0.18f), new Vector3(0.05f, 0.05f, 0.3f), "Claw"); Prim(fig, _sphere, skin, new Vector3(0.17f, bodyH * 0.9f, -0.18f), new Vector3(0.05f, 0.05f, 0.3f), "Claw"); }
-            if (k.Tier == 0 && idx == 1) foreach (Transform t in fig) { var r = t.GetComponent<MeshRenderer>(); if (r && t.name != "EyeL" && t.name != "EyeR") r.sharedMaterial = ProcGen.Metal(new Color(0.05f, 0.05f, 0.08f), 0f, 0.95f); }
-            if (m.IsBoss) Prim(fig, _sphere, _homeMat, new Vector3(0, bodyH * 0.75f, -0.17f), new Vector3(0.1f, 0.1f, 0.05f), "Gem");
-            return root;
         }
 
         // ---------------- Per-frame sync ----------------
@@ -193,7 +286,7 @@ namespace Abduction
             bool yard = g?.Level == null;
             if (yard && _backyard == null) BuildBackyard();
             if (_backyard) _backyard.gameObject.SetActive(yard);
-            if (_moon) _moon.enabled = yard;
+            if (_moon) _moon.enabled = yard; if (_key) { _key.enabled = !yard; _rim.enabled = !yard; }
             RenderSettings.fog = !yard;
             Cam.backgroundColor = yard ? new Color(0.03f, 0.05f, 0.12f) : new Color(0.02f, 0.05f, 0.08f);
             if (yard) { if (_levelRoot) _levelRoot.gameObject.SetActive(false); _builtFor = null; _snap = true; return; }
@@ -248,6 +341,7 @@ namespace Abduction
             Cam.transform.position = _camPos - fwd * 0.38f + shake;
             Cam.transform.rotation = Quaternion.Euler(2f, _camYaw, 0);
             _lamp.transform.position = Cam.transform.position + Vector3.up * 0.15f;
+            _key.transform.rotation = Quaternion.Euler(50, _camYaw + 20, 0); _rim.transform.rotation = Quaternion.Euler(15, _camYaw + 180 + 25, 0);
             _probe.transform.position = _camPos;
             _probeTimer -= dt; if (_probeTimer <= 0 && (target - _camPos).sqrMagnitude < 0.0004f) { _probe.RenderProbe(); _probeTimer = 1.5f; }
 

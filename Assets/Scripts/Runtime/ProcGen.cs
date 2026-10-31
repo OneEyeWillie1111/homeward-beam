@@ -166,6 +166,136 @@ namespace Abduction
             return m;
         }
 
+        // ---------------- Creature skin (procedural; style targets only, nothing traced) ----------------
+        public static Material Skin(Texture2D albedo, Texture2D normal, Texture2D emissionMap, float metallic, float smooth, Color? emission = null)
+        {
+            var m = Template(emissionMap != null ? "SkinEmissive" : "MetalTextured");
+            m.mainTexture = albedo; m.color = Color.white;
+            m.SetFloat("_Metallic", metallic); m.SetFloat("_Glossiness", smooth); m.SetFloat("_GlossMapScale", smooth);
+            m.SetFloat("_SmoothnessTextureChannel", 1); m.EnableKeyword("_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A");
+            if (normal != null) { m.SetTexture("_BumpMap", normal); m.SetFloat("_BumpScale", 1f); m.EnableKeyword("_NORMALMAP"); }
+            if (emissionMap != null)
+            {
+                m.EnableKeyword("_EMISSION"); m.SetTexture("_EmissionMap", emissionMap); m.SetColor("_EmissionColor", emission ?? Color.white);
+                m.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
+            }
+            return m;
+        }
+
+        static float VNoise(float x, float y, int seed)
+        {
+            int xi = Mathf.FloorToInt(x), yi = Mathf.FloorToInt(y); float fx = x - xi, fy = y - yi;
+            fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+            float H(int a, int b) { uint h = (uint)(a * 374761393 + b * 668265263 + seed * 1442695041); h = (h ^ (h >> 13)) * 1274126177u; return ((h ^ (h >> 16)) & 0xFFFF) / 65535f; }
+            return Mathf.Lerp(Mathf.Lerp(H(xi, yi), H(xi + 1, yi), fx), Mathf.Lerp(H(xi, yi + 1), H(xi + 1, yi + 1), fx), fy);
+        }
+        static float Fbm(float x, float y, int seed) { float v = 0, a = 0.5f; for (int o = 0; o < 4; o++) { v += a * VNoise(x, y, seed + o * 17); x *= 2.03f; y *= 2.03f; a *= 0.5f; } return v; }
+
+        /// <summary>Mottled skin albedo; alpha = smoothness (pores slightly duller).</summary>
+        public static Texture2D MottleAlbedo(Color tone, int seed, int size = 256)
+        {
+            var t = new Texture2D(size, size, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Repeat, anisoLevel = 4 };
+            var px = new Color32[size * size];
+            for (int y = 0; y < size; y++) for (int x = 0; x < size; x++)
+            {
+                float u = (float)x / size * 8, v = (float)y / size * 8;
+                float n = Fbm(u, v, seed), spot = Mathf.Clamp01((VNoise(u * 4, v * 4, seed + 9) - 0.72f) * 4f);
+                float k = 0.82f + (n - 0.5f) * 0.35f - spot * 0.18f;
+                px[y * size + x] = new Color(tone.r * k, tone.g * k, tone.b * k, 0.55f - spot * 0.3f);
+            }
+            t.SetPixels32(px); t.Apply(true); return t;
+        }
+
+        static Texture2D NormalFromHeight(float[] h, int size, float strength)
+        {
+            var t = new Texture2D(size, size, TextureFormat.RGBA32, true, true) { wrapMode = TextureWrapMode.Repeat, anisoLevel = 4 };
+            var px = new Color32[size * size];
+            for (int y = 0; y < size; y++) for (int x = 0; x < size; x++)
+            {
+                float dx = (h[y * size + (x + 1) % size] - h[y * size + (x + size - 1) % size]) * strength;
+                float dy = (h[((y + 1) % size) * size + x] - h[((y + size - 1) % size) * size + x]) * strength;
+                var n = new Vector3(-dx, -dy, 1).normalized;
+                px[y * size + x] = new Color(n.x * 0.5f + 0.5f, n.y * 0.5f + 0.5f, n.z * 0.5f + 0.5f, 1);
+            }
+            t.SetPixels32(px); t.Apply(true); return t;
+        }
+
+        /// <summary>Gaunt-body relief for the sphere UV layout (u=0.75 faces forward): rib bands and clavicle ridge on the front,
+        /// plus fine wrinkles everywhere.</summary>
+        public static Texture2D GaunterNormal(int size = 256)
+        {
+            var h = new float[size * size];
+            for (int y = 0; y < size; y++) for (int x = 0; x < size; x++)
+            {
+                float u = (float)x / size, v = (float)y / size;
+                float front = Mathf.Clamp01(1 - Mathf.Abs(u - 0.75f) * 4.5f);
+                float ribZone = Mathf.Clamp01((v - 0.4f) * 8) * Mathf.Clamp01((0.68f - v) * 8);
+                float ribs = Mathf.Pow(Mathf.Abs(Mathf.Sin(v * 70f)), 3) * ribZone * front;
+                float sternum = Mathf.Clamp01(1 - Mathf.Abs(u - 0.75f) * 60f) * ribZone;
+                float clav = Mathf.Exp(-Mathf.Pow((v - 0.76f) * 30f, 2)) * front;
+                h[y * size + x] = ribs * 0.8f - sternum * 0.6f + clav + Fbm(u * 24, v * 24, 5) * 0.25f;
+            }
+            return NormalFromHeight(h, size, 3f);
+        }
+
+        static void Cells(float u, float v, int cu, int cv, int seed, out float f1, out float f2, out int id)
+        {
+            float x = u * cu, y = v * cv; int xi = Mathf.FloorToInt(x), yi = Mathf.FloorToInt(y);
+            f1 = f2 = 9; id = 0;
+            for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++)
+            {
+                int cx = ((xi + i) % cu + cu) % cu, cy = yi + j;
+                uint hsh = (uint)(cx * 73856093 ^ cy * 19349663 ^ seed * 83492791); hsh = (hsh ^ (hsh >> 13)) * 1274126177u;
+                float jx = ((hsh & 255) / 255f) * 0.8f + 0.1f, jy = (((hsh >> 8) & 255) / 255f) * 0.8f + 0.1f;
+                float dx = xi + i + jx - x, dy = cy + jy - y, d = Mathf.Sqrt(dx * dx + dy * dy);
+                if (d < f1) { f2 = f1; f1 = d; id = (int)(hsh >> 16); } else if (d < f2) f2 = d;
+            }
+        }
+
+        /// <summary>Reptile scale albedo: per-scale tone variation, darker grooves; alpha = smoothness (scales glossier than grooves).</summary>
+        public static Texture2D ScaleAlbedo(Color tone, int seed, int size = 256)
+        {
+            var t = new Texture2D(size, size, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Repeat, anisoLevel = 4 };
+            var px = new Color32[size * size];
+            for (int y = 0; y < size; y++) for (int x = 0; x < size; x++)
+            {
+                float u = (float)x / size, v = (float)y / size;
+                Cells(u, v, 40, 26, seed, out float f1, out float f2, out int id);
+                float edge = Mathf.Clamp01((f2 - f1) * 5f), var = ((id & 255) / 255f - 0.5f) * 0.22f, n = Fbm(u * 10, v * 10, seed) - 0.5f;
+                float k = (0.65f + 0.35f * edge) * (1 + var + n * 0.3f);
+                float warm = Mathf.Clamp01(n * 2) * 0.12f;   // faint ochre in places
+                px[y * size + x] = new Color(tone.r * k + warm, tone.g * k + warm * 0.5f, tone.b * k, 0.25f + 0.35f * edge);
+            }
+            t.SetPixels32(px); t.Apply(true); return t;
+        }
+
+        public static Texture2D ScaleNormal(int seed, int size = 256)
+        {
+            var h = new float[size * size];
+            for (int y = 0; y < size; y++) for (int x = 0; x < size; x++)
+            {
+                float u = (float)x / size, v = (float)y / size;
+                Cells(u, v, 40, 26, seed, out float f1, out float f2, out _);
+                h[y * size + x] = Mathf.Sqrt(Mathf.Clamp01((f2 - f1) * 3f));
+            }
+            return NormalFromHeight(h, size, 5f);
+        }
+
+        /// <summary>Emission mask simulating warm underlighting: strongest low on the front (throat/chest), fading up and around.</summary>
+        public static Texture2D UnderglowMap(int size = 128)
+        {
+            var t = new Texture2D(size, size, TextureFormat.RGBA32, true) { wrapMode = TextureWrapMode.Repeat };
+            var px = new Color32[size * size];
+            for (int y = 0; y < size; y++) for (int x = 0; x < size; x++)
+            {
+                float u = (float)x / size, v = (float)y / size;
+                float front = Mathf.Clamp01(1 - Mathf.Abs(u - 0.75f) * 3.2f), low = Mathf.Clamp01(1 - v * 1.6f);
+                float g = Mathf.Pow(front, 1.5f) * low * (0.75f + 0.25f * Fbm(u * 12, v * 12, 3));
+                px[y * size + x] = new Color(g, g * 0.75f, g * 0.45f, 1);
+            }
+            t.SetPixels32(px); t.Apply(true); return t;
+        }
+
         public static Material Glow(Color c, float intensity)
         {
             var m = Template("Glow"); m.color = c * 0.3f;

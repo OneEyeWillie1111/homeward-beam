@@ -106,3 +106,6 @@ The keyboard also works in the editor: WASD or the arrow keys to move, Space to 
 8. **On the phone:** open the APK. If Android blocks it, allow **Install unknown apps** for your browser or My Files, then tap **Install**.
 
 **Signing:** unless you upload a keystore in the build target's Android signing settings, Build Automation makes a **debug-signed** APK. That's fine for testing on your own phone, but it can't be published to Google Play.
+
+### Alien art direction
+Grays: pale blue-gray mottled skin, bulbous cranium tapering to a narrow chin, huge glossy black almond eyes, nose slits, tiny mouth, long thin neck, gaunt torso with rib/clavicle relief, long thin arms, three hunch variants. Saurians and the boss: olive scaly skin (procedural scale normal map), smooth elongated dome head, heavy brow, amber slit eyes with gold rims, long lipless jaw, thick neck and shoulders, warm amber underglow on throat and chest. Moody desaturated lighting with a warm key light and a cool rim light. Everything is generated in code; no reference images ship in the build.
