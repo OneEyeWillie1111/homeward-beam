@@ -19,6 +19,9 @@ namespace Abduction.Core
         public Level Level;
         public int Depth => Level?.Depth ?? 0;
         public int X, Y; public Dir Facing = Dir.North;
+        /// <summary>Free-flow position in tile units (tile centres are integers) and heading in degrees (0 = North, 90 = East).</summary>
+        public float PX, PY, Yaw;
+        public const float MoveSpeed = 2.4f, TurnSpeed = 150f, Radius = 0.24f;
         public int War, WarMax, Spirit, SpiritMax;
         public int Reincarnations; public int Kills; public int DeepestDepth;
         public readonly InventoryRing Ring = new InventoryRing();
@@ -40,7 +43,7 @@ namespace Abduction.Core
             WarMax = War = Clamp(GameData.StartWar(d) + bw); SpiritMax = Spirit = Clamp(GameData.StartSpirit(d) + bs);
             GiveStarterKit();
             Mode = Mode.Backyard;
-            Message = "A quiet night in the backyard... then a blinding light. Tap BEAM.";
+            Message = "A quiet night in the backyard... then a blinding light. Tap USE.";
         }
 
         /// <summary>The abduction beam: leave the backyard for deck 1.</summary>
@@ -71,15 +74,59 @@ namespace Abduction.Core
         public void EnterLevel(int depth)
         {
             Level = new Level(depth, RunSeed, Difficulty);
-            X = Level.StartX; Y = Level.StartY; Facing = Dir.North; Foe = null;
+            X = Level.StartX; Y = Level.StartY; Facing = Dir.North; Foe = null; Snap();
             Seen = new bool[Level.Size, Level.Size]; Reveal();
             if (depth > DeepestDepth) DeepestDepth = depth;
             if (Mode == Mode.Combat) Mode = Mode.Explore;
         }
 
         // ---------- Exploration ----------
-        public void TurnLeft() { if (Mode != Mode.Explore) return; Facing = Facing.Left(); Play(Sfx.Step); }
-        public void TurnRight() { if (Mode != Mode.Explore) return; Facing = Facing.Right(); Play(Sfx.Step); }
+        public void TurnLeft() { if (Mode != Mode.Explore) return; Facing = Facing.Left(); Snap(); Play(Sfx.Step); }
+        public void TurnRight() { if (Mode != Mode.Explore) return; Facing = Facing.Right(); Snap(); Play(Sfx.Step); }
+        /// <summary>Put the free-flow position on the logical tile centre and the heading on the facing.</summary>
+        public void Snap() { PX = X; PY = Y; Yaw = (int)Facing * 90f; }
+        static int Round(float v) => (int)Math.Floor(v + 0.5f);
+
+        /// <summary>Tile that blocks free movement (walls, closed hatches, sealed lockers, live aliens).</summary>
+        bool Blocks(int x, int y) => !Level.Passable(x, y) || (Level.ChestAt(x, y) is Chest c && !c.Opened) || Level.MonsterAt(x, y) != null;
+
+        /// <summary>First blocking tile touched by a circle at (cx, cy), or null.</summary>
+        (int x, int y)? Hit(float cx, float cy)
+        {
+            for (int tx = Round(cx - Radius); tx <= Round(cx + Radius); tx++)
+                for (int ty = Round(cy - Radius); ty <= Round(cy + Radius); ty++)
+                    if (Blocks(tx, ty)) return (tx, ty);
+            return null;
+        }
+
+        /// <summary>Joystick-driven free movement. forward/turn are -1..1 (stick up = forward, stick right = turn right).
+        /// Slides along walls; bumping an alien starts a fight; bumping a hatch or locker explains how to open it.
+        /// Returns true when something the HUD shows changed (tile, mode, message).</summary>
+        public bool Move(float forward, float turn, float dt)
+        {
+            if (Mode != Mode.Explore || Level == null || dt <= 0) return false;
+            if (dt > 0.1f) dt = 0.1f;
+            forward = Math.Max(-1, Math.Min(1, forward)); turn = Math.Max(-1, Math.Min(1, turn));
+            Yaw = ((Yaw + turn * TurnSpeed * dt) % 360f + 360f) % 360f;
+            var oldFacing = Facing; Facing = (Dir)(Round(Yaw / 90f) % 4);
+            bool changed = Facing != oldFacing;
+            if (Math.Abs(forward) < 0.01f) return changed;
+            double r = Yaw * Math.PI / 180; float step = forward * (forward < 0 ? 0.6f : 1f) * MoveSpeed * dt;
+            float dx = (float)Math.Sin(r) * step, dy = -(float)Math.Cos(r) * step;
+            (int x, int y)? bumped = null;
+            var hx = Hit(PX + dx, PY); if (hx == null) PX += dx; else bumped = hx;
+            var hy = Hit(PX, PY + dy); if (hy == null) PY += dy; else bumped ??= hy;
+            if (bumped is (int bx, int by) && Math.Abs(forward) > 0.3f)
+            {
+                var m = Level.MonsterAt(bx, by);
+                if (m != null) { BeginCombat(m); return true; }
+                string msg = Level.At(bx, by) == Tile.Door ? "A closed hatch. Face it and tap USE." : Level.ChestAt(bx, by) != null ? "A sealed supply locker. Face it and tap USE." : Message;
+                if (msg != Message) { Message = msg; Play(Sfx.Bump); changed = true; }
+            }
+            int nx = Round(PX), ny = Round(PY);
+            if (nx != X || ny != Y) { _fromX = X; _fromY = Y; X = nx; Y = ny; Message = ""; Play(Sfx.Step); OnEnterTile(); return true; }
+            return changed;
+        }
         public void StepForward() => Step(Facing);
         public void StepBack() => Step(Facing.Back());
 
@@ -88,20 +135,25 @@ namespace Abduction.Core
             if (Mode != Mode.Explore) return;
             int nx = X + d.Dx(), ny = Y + d.Dy();
             var t = Level.At(nx, ny);
-            if (t == Tile.Door) { Message = "A closed door. Tap OPEN."; Play(Sfx.Bump); return; }
+            if (t == Tile.Door) { Message = "A closed hatch. Face it and tap USE."; Play(Sfx.Bump); return; }
             if (!Level.Passable(nx, ny)) { Message = "Solid stone."; Play(Sfx.Bump); return; }
             var chest = Level.ChestAt(nx, ny);
-            if (chest != null && !chest.Opened) { Message = "A locked supply locker. Face it and tap OPEN."; Play(Sfx.Bump); return; }
+            if (chest != null && !chest.Opened) { Message = "A sealed supply locker. Face it and tap USE."; Play(Sfx.Bump); return; }
             var m = Level.MonsterAt(nx, ny);
             if (m != null) { BeginCombat(m); return; }
-            _fromX = X; _fromY = Y; X = nx; Y = ny; Message = ""; Play(Sfx.Step); Reveal();
+            _fromX = X; _fromY = Y; X = nx; Y = ny; Message = ""; Play(Sfx.Step); Snap(); OnEnterTile();
+        }
+
+        void OnEnterTile()
+        {
+            Reveal();
             if (Level.FloorItems.TryGetValue(Level.Key(X, Y), out var it))
             {
                 if (Ring.Add(it)) { Level.FloorItems.Remove(Level.Key(X, Y)); Message = $"Picked up {it}."; Play(Sfx.Pickup); RefreshEquipment(); }
                 else Message = $"{it.Name} lies here, but your ring is full. Drop something.";
             }
-            if (Level.At(X, Y) == Tile.Teleporter) Message = "A teleporter pad hums here. Tap BEAM to go down a deck.";
-            if (Level.At(X, Y) == Tile.HomeMachine) Message = "The teleportation machine home! Tap BEAM.";
+            if (Level.At(X, Y) == Tile.Teleporter) Message = "A teleporter pad hums here. Tap USE to beam down a deck.";
+            if (Level.At(X, Y) == Tile.HomeMachine) Message = "The teleportation machine home! Tap USE.";
             // A monster standing next to you in its room notices you and attacks.
             var near = Level.MonsterAt(X + Facing.Dx(), Y + Facing.Dy());
             if (near != null) BeginCombat(near);
@@ -147,7 +199,7 @@ namespace Abduction.Core
         {
             var c = Ring.Current; Play(Sfx.Select); if (c == null) return;
             if (c.Kind == ItemKind.Weapon || c.Kind == ItemKind.Magic) { EquippedWeapon = c; Message = $"Equipped {c}."; }
-            else Message = $"Holding {c}." + (c.Kind == ItemKind.Food ? " Tap USE to eat." : c.Kind == ItemKind.Key ? " Face a locker and tap OPEN." : " Armor is worn automatically.");
+            else Message = $"Holding {c}." + (c.Kind == ItemKind.Food ? " Tap USE to eat." : c.Kind == ItemKind.Key ? " Face a locker and tap USE." : " Armor is worn automatically.");
         }
 
         /// <summary>Reveal the auto-map: everything within 1 tile, plus straight lines of sight in all four directions.</summary>
@@ -172,21 +224,80 @@ namespace Abduction.Core
                 switch (Mode)
                 {
                     case Mode.Title: return "Choose your species and role, then tap START.";
-                    case Mode.Backyard: return "A light in the sky! Tap BEAM to be taken.";
+                    case Mode.Backyard: return "A light in the sky! Tap USE to be taken.";
                     case Mode.Victory: return "You made it home! Tap NEW RUN to play again.";
-                    case Mode.Combat: return Foe == null ? "" : $"{Foe.Name}! ATTACK with your {EquippedWeapon?.Name ?? "fists"}, USE an item, or FLEE.";
+                    case Mode.Combat: return Foe == null ? "" : $"{Foe.Name}! ATTACK with your {EquippedWeapon?.Name ?? "fists"}, USE held item, SCAN it, or FLEE.";
                 }
                 var t = Level.At(X, Y);
-                if (t == Tile.Teleporter) return "Teleporter pad: tap BEAM to go down a deck.";
-                if (t == Tile.HomeMachine) return "The machine home: tap BEAM!";
+                if (t == Tile.Teleporter) return "Teleporter pad: tap USE to beam down a deck.";
+                if (t == Tile.HomeMachine) return "The machine home: tap USE!";
                 int fx = X + Facing.Dx(), fy = Y + Facing.Dy();
-                if (Level.At(fx, fy) == Tile.Door) return "Hatch ahead: tap OPEN.";
+                if (Level.At(fx, fy) == Tile.Door) return "Hatch ahead: tap USE to open.";
                 var c = Level.ChestAt(fx, fy);
-                if (c != null) return Ring.First(ItemKind.Key) != null ? "Supply locker: tap OPEN to use your access card." : "Locked supply locker: find an access card.";
-                if (Level.MonsterAt(fx, fy) != null) return "An alien blocks the way: step FORWARD to fight.";
+                if (c != null) return Ring.First(ItemKind.Key) != null ? "Supply locker: tap USE to open it with your access card." : "Locked supply locker: find an access card.";
+                if (Level.MonsterAt(fx, fy) != null) return "An alien ahead: tap ATTACK.";
                 if (War < WarMax / 3 && Ring.First(ItemKind.Food) != null) return "Low War health: select food on the ring and tap USE.";
-                return Depth == DeckCount ? "Final deck: find the machine home." : "Explore with FORWARD / TURN. Find the glowing teleporter.";
+                return Depth == DeckCount ? "Final deck: find the machine home." : "Drag the joystick to explore. SCAN to find the teleporter.";
             }
+        }
+
+        // ---------- Action buttons ----------
+        /// <summary>Label for the context-sensitive USE button.</summary>
+        public string UseLabel
+        {
+            get
+            {
+                if (Mode == Mode.Backyard) return "BEAM";
+                if (Mode != Mode.Explore || Level == null) return "USE";
+                var t = Level.At(X, Y); if (t == Tile.Teleporter || t == Tile.HomeMachine) return "BEAM";
+                int fx = X + Facing.Dx(), fy = Y + Facing.Dy();
+                if (Level.At(fx, fy) == Tile.Door || Level.ChestAt(fx, fy) != null) return "OPEN";
+                return "USE";
+            }
+        }
+
+        /// <summary>USE: board the beam in the backyard, beam down on a teleporter, open the hatch/locker ahead, else use the held item.</summary>
+        public void UseAction()
+        {
+            switch (UseLabel)
+            {
+                case "BEAM": Descend(); return;
+                case "OPEN": Open(); return;
+                default: UseItem(); return;
+            }
+        }
+
+        /// <summary>ATTACK: strike in a fight; while exploring, attack the alien you are facing (starts the fight).</summary>
+        public void AttackAction()
+        {
+            if (Mode == Mode.Combat) { Attack(); return; }
+            if (Mode != Mode.Explore) return;
+            var m = Level.MonsterAt(X + Facing.Dx(), Y + Facing.Dy());
+            if (m == null) { Message = "Nothing to attack. Face an alien first."; Play(Sfx.Miss); return; }
+            BeginCombat(m); Attack();
+        }
+
+        /// <summary>SCAN: free sensor sweep. Maps nearby tiles and points to the teleporter; in a fight, reads the foe.</summary>
+        public void Scan()
+        {
+            if (Mode == Mode.Combat && Foe != null)
+            {
+                Message = $"Scan: {Foe.Name}, {Foe.Kind.Nature} alien, {Math.Max(0, Foe.Hp)}/{Foe.MaxHp} HP. " + (Foe.Kind.Nature == MonsterNature.War ? "Weapons hit it hardest." : "Psionics hit it hardest.");
+                Play(Sfx.Select); return;
+            }
+            if (Mode == Mode.Backyard) { Message = "Scan: something huge is hovering overhead. Tap USE."; Play(Sfx.Select); return; }
+            if (Mode != Mode.Explore || Level == null) return;
+            for (int dx = -4; dx <= 4; dx++) for (int dy = -4; dy <= 4; dy++) if (Level.InBounds(X + dx, Y + dy)) Seen[X + dx, Y + dy] = true;
+            int near = 0; foreach (var m in Level.Monsters) if (m.Hp > 0 && Math.Abs(m.X - X) + Math.Abs(m.Y - Y) <= 6) near++;
+            string where = "";
+            if (Level.TeleX >= 0)
+            {
+                int ddx = Level.TeleX - X, ddy = Level.TeleY - Y;
+                string ns = ddy < 0 ? "north" : ddy > 0 ? "south" : "", ew = ddx > 0 ? "east" : ddx < 0 ? "west" : "";
+                where = ns + ew == "" ? "You are on it!" : $"{(Depth == DeckCount ? "Machine home" : "Teleporter")} {Math.Abs(ddx) + Math.Abs(ddy)} tiles {ns}{(ns != "" && ew != "" ? "-" : "")}{ew}.";
+            }
+            Message = $"Scan: {where} {(near == 0 ? "No aliens close." : near + " alien" + (near == 1 ? "" : "s") + " close.")}";
+            Play(Sfx.Magic);
         }
 
         // ---------- Combat ----------
@@ -195,6 +306,7 @@ namespace Abduction.Core
             Foe = m; Mode = Mode.Combat;
             // Face the foe.
             for (int k = 0; k < 4; k++) if (X + ((Dir)k).Dx() == m.X && Y + ((Dir)k).Dy() == m.Y) Facing = (Dir)k;
+            Snap();
             Message = m.IsBoss ? $"{m.Name} rises from the machine! ({m.Hp} HP)" : $"A {m.Name} attacks! ({m.Kind.Nature}, {m.Hp} HP)";
             Play(Sfx.Hurt);
         }
@@ -243,7 +355,7 @@ namespace Abduction.Core
                 if (Spirit < 3) { Message = "Not enough spirit."; return false; }
                 Spirit -= 2; War = Clamp(Math.Min(WarMax, War + it.Power)); Message = $"The {it.Name} mends your wounds."; Play(Sfx.Magic); return true;
             }
-            Message = it.Kind == ItemKind.Key ? "Access cards open supply lockers: face one and tap OPEN." : it.Kind == ItemKind.Armor ? "Armor protects you while it is in your ring." : "Select it and tap ATTACK.";
+            Message = it.Kind == ItemKind.Key ? "Access cards open supply lockers: face one and tap USE." : it.Kind == ItemKind.Armor ? "Armor protects you while it is in your ring." : "Select it and tap ATTACK.";
             return false;
         }
 
@@ -254,7 +366,7 @@ namespace Abduction.Core
             {
                 Mode = Mode.Explore;
                 if (Level.Passable(_fromX, _fromY) && Level.MonsterAt(_fromX, _fromY) == null && !(_fromX == X && _fromY == Y)) { X = _fromX; Y = _fromY; }
-                Facing = Facing.Back();
+                Facing = Facing.Back(); Snap();
                 Message = $"You escape the {Foe.Name}."; Foe = null; Play(Sfx.Step); return true;
             }
             Message = Foe.IsBoss ? "There is no running from the Coiled Sovereign!" : "You fail to escape!"; Play(Sfx.Miss);

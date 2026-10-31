@@ -30,6 +30,9 @@ namespace Abduction
         float _probeTimer;
 
         public static Vector3 W(int x, int y) => new Vector3(x, 0, -y);
+        public static Vector3 Wf(float x, float y) => new Vector3(x, 0, -y);
+        /// <summary>Where the back of the head sits (camera viewport 0..1) and its height as a fraction of the screen; set by the UI layout.</summary>
+        public float HeadVX = 0.5f, HeadVY = 0.1f, HeadVH = 0.15f;
         static float Yaw(Dir d) => (int)d * 90f;
 
         public void Init(Camera cam)
@@ -329,16 +332,19 @@ namespace Abduction
                 return;
             }
             if (g.Level != _builtFor) return;
-            var target = W(g.X, g.Y) + Vector3.up * EyeH; float yaw = Yaw(g.Facing);
+            var target = Wf(g.PX, g.PY) + Vector3.up * EyeH; float yaw = g.Yaw;
             if (_snap) { _camPos = target; _camYaw = yaw; _snap = false; }
-            // Critically-damped ease toward the logical tile/facing: smooth steps and turns.
-            float a = 1f - Mathf.Exp(-dt * 13f);
+            // Light ease toward the free-flow position/heading (no bob): smooth but responsive.
+            float a = 1f - Mathf.Exp(-dt * 18f);
             _camPos = Vector3.Lerp(_camPos, target, a); _camYaw = Mathf.LerpAngle(_camYaw, yaw, a);
             // Steady camera (no walk bob); only a brief, small shake when you take damage.
             var shake = _shake > 0 ? Random.insideUnitSphere * 0.02f * _shake : Vector3.zero; _shake = Mathf.Max(0, _shake - dt);
             // Start slightly behind the tile centre so the facing wall/monster fills the view nicely.
             var fwd = Quaternion.Euler(0, _camYaw, 0) * Vector3.forward;
-            Cam.transform.position = _camPos - fwd * 0.38f + shake;
+            // Pull back behind the head, but never into the wall behind you.
+            float pull = 0.38f; var back = _camPos - fwd * pull;
+            if (!g.Level.Passable(Mathf.RoundToInt(back.x), Mathf.RoundToInt(-back.z))) pull = 0.1f;
+            Cam.transform.position = _camPos - fwd * pull + shake;
             Cam.transform.rotation = Quaternion.Euler(2f, _camYaw, 0);
             _lamp.transform.position = Cam.transform.position + Vector3.up * 0.15f;
             _key.transform.rotation = Quaternion.Euler(50, _camYaw + 20, 0); _rim.transform.rotation = Quaternion.Euler(15, _camYaw + 180 + 25, 0);
@@ -406,15 +412,15 @@ namespace Abduction
             }
         }
 
-        /// <summary>Holds the head perfectly still at the ring centre: bottom-centre of the view, scaled to fit inside the ring.</summary>
+        /// <summary>Holds the head perfectly still at the bottom-centre of the screen (UiLayout.Head).</summary>
         void PlaceHead()
         {
             if (_head == null || !_head.gameObject.activeSelf) return;
             float vw = Cam.pixelWidth, vh = Cam.pixelHeight; if (vw < 2 || vh < 2) return;
-            var ring = UiLayout.RingInView(vw, vh); var (hx, hy) = UiLayout.HeadViewport(vw, vh);
+            float hx = HeadVX, hy = HeadVY;
             const float dist = 0.6f;
             float worldH = 2f * dist * Mathf.Tan(Cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
-            float diam = ring.H * 2f * UiLayout.HubHalf * worldH * 1.05f;
+            float diam = HeadVH * worldH * 0.95f;
             var local = Cam.transform.InverseTransformPoint(Cam.ViewportToWorldPoint(new Vector3(hx, hy, dist)));
             _head.localPosition = local; _head.localRotation = Quaternion.identity; _head.localScale = Vector3.one * diam;
         }

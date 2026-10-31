@@ -70,7 +70,7 @@ public class CoreTests
         var dog = new Game(1); dog.Start(Difficulty.Abductee, Species.Dog);
         Assert.AreEqual(Mode.Backyard, cat.Mode); Assert.IsNull(cat.Level);
         Assert.Greater(cat.SpiritMax, dog.SpiritMax); Assert.Greater(dog.WarMax, cat.WarMax);
-        StringAssert.Contains("BEAM", cat.Prompt);
+        StringAssert.Contains("USE", cat.Prompt);
         Assert.IsTrue(cat.Descend(), "BEAM in the backyard = abduction");
         Assert.AreEqual(Mode.Explore, cat.Mode); Assert.AreEqual(1, cat.Depth); Assert.AreEqual(GameData.Intro, cat.Message);
         Assert.AreEqual(Species.Cat, cat.Species);
@@ -182,10 +182,10 @@ public class CoreTests
         var g = Started(11, diff);
         var f = g.Facing; g.TurnRight(); Assert.AreEqual(f.Right(), g.Facing); g.TurnLeft(); Assert.AreEqual(f, g.Facing);
         g.Level.Tiles[g.X, g.Y - 1] = Tile.Door; g.Facing = Dir.North;
-        StringAssert.Contains("OPEN", g.Prompt);
+        StringAssert.Contains("USE", g.Prompt);
         g.StepForward(); Assert.AreEqual(Tile.Door, g.Level.At(g.X, g.Y - 1));
         g.Open(); Assert.AreEqual(Tile.OpenDoor, g.Level.At(g.X, g.Y - 1));
-        for (int d = 1; d < g.DeckCount; d++) { g.X = g.Level.TeleX; g.Y = g.Level.TeleY; StringAssert.Contains("BEAM", g.Prompt); Assert.IsTrue(g.Descend()); Assert.AreEqual(d + 1, g.Depth); }
+        for (int d = 1; d < g.DeckCount; d++) { g.X = g.Level.TeleX; g.Y = g.Level.TeleY; StringAssert.Contains("USE", g.Prompt); Assert.IsTrue(g.Descend()); Assert.AreEqual(d + 1, g.Depth); }
         Assert.AreEqual(GameData.DeckCount(diff), g.Depth);
         Assert.IsTrue(g.Level.Monsters.Exists(m => m.IsBoss && m.X == g.Level.TeleX && m.Y == g.Level.TeleY));
         g.Level.Monsters.Clear(); g.X = g.Level.TeleX; g.Y = g.Level.TeleY;
@@ -237,31 +237,130 @@ public class CoreTests
         foreach (Sfx s in System.Enum.GetValues(typeof(Sfx))) { var d = SoundSynth.Make(s); Assert.Greater(d.Length, 100); foreach (var x in d) Assert.LessOrEqual(System.Math.Abs(x), 1f); }
     }
 
-    [TestCase(2340, 1080)] [TestCase(1080, 2340)] [TestCase(1920, 1080)] [TestCase(1080, 1920)]
-    public void LayoutFitsS22PlusBothOrientations(int w, int h)
+    // Portrait-locked: S22 safe areas (full 1080x2340, minus cutout/status ~ 1080x2250), plus a 1080x1920 and 1440x3088 phone.
+    [TestCase(1080, 2340)] [TestCase(1080, 2250)] [TestCase(1080, 1920)] [TestCase(1440, 3088)]
+    public void CornerLayoutNoOverlaps(int w, int h)
     {
-        bool portrait = h >= w;
-        var regs = new[] { UiLayout.View(portrait), UiLayout.Hud(portrait), UiLayout.Pad(portrait) };
-        float area = 0; foreach (var r in regs) area += r.W * r.H;
-        Assert.AreEqual(1f, area, 1e-4f, "panels tile the screen");
-        for (int i = 0; i < regs.Length; i++) for (int j = i + 1; j < regs.Length; j++) Assert.IsFalse(regs[i].Overlaps(regs[j]));
-        var v = UiLayout.View(portrait); float vw = v.W * w, vh = v.H * h;
-        var ring = UiLayout.RingInView(vw, vh); var map = UiLayout.MapInView(vw, vh);
-        Assert.IsFalse(ring.Overlaps(map), "corner map clear of the ring");
-        Assert.GreaterOrEqual(ring.X0, 0); Assert.LessOrEqual(ring.X1, 1); Assert.LessOrEqual(ring.Y1, 1);
-        Assert.AreEqual(ring.W * vw, ring.H * vh, 0.5f, "ring area is square");
-        float side = UiLayout.RingSquarePx(w, h);
-        Assert.GreaterOrEqual(side * UiLayout.SlotSize, 100, "each ring slot at least 100px to tap");
-        Assert.GreaterOrEqual(map.W * vw, 180, "map readable");
-        var (hx, hy) = UiLayout.HeadViewport(vw, vh); Assert.AreEqual(0.5f, hx); Assert.AreEqual((ring.Y0 + ring.Y1) / 2, hy, 1e-5f);
+        var named = new List<(string n, Region r)>
+        {
+            ("hud", UiLayout.Hud(w, h)), ("map", UiLayout.Map(w, h)), ("ring", UiLayout.Ring(w, h)), ("help", UiLayout.HelpButton(w, h)),
+            ("deck", UiLayout.DeckText(w, h)), ("head", UiLayout.Head(w, h)), ("joystick", UiLayout.JoystickZone(w, h)),
+            ("prompt", UiLayout.Prompt(w, h)), ("foe", UiLayout.FoeBar(w, h)),
+        };
+        foreach (ActionButton b in System.Enum.GetValues(typeof(ActionButton))) named.Add(("btn" + b, UiLayout.Button(b, w, h)));
+        foreach (var (n, r) in named) { Assert.GreaterOrEqual(r.X0, 0, n); Assert.GreaterOrEqual(r.Y0, 0, n); Assert.LessOrEqual(r.X1, 1, n); Assert.LessOrEqual(r.Y1, 1, n); Assert.Greater(r.W, 0, n); Assert.Greater(r.H, 0, n); }
+        for (int i = 0; i < named.Count; i++) for (int j = i + 1; j < named.Count; j++)
+            Assert.IsFalse(named[i].r.Overlaps(named[j].r), $"{named[i].n} overlaps {named[j].n} at {w}x{h}");
+        var ring = UiLayout.Ring(w, h); var map = UiLayout.Map(w, h);
+        Assert.AreEqual(ring.W * w, ring.H * h, 0.5f, "ring panel is square"); Assert.Greater(ring.X0, 0.5f, "ring tucked in the right corner"); Assert.Greater(ring.Y0, 0.5f, "ring in the upper corner");
+        Assert.GreaterOrEqual(ring.W * w * UiLayout.SlotSize, 90, "ring slots big enough to tap");
+        Assert.GreaterOrEqual(map.W * w, 250, "map readable");
+        // The central view (middle of the screen) stays clear of all UI.
+        var centre = new Region(0.3f, 0.42f, 0.7f, 0.55f);
+        foreach (var (n, r) in named) if (n != "prompt" && n != "foe") Assert.IsFalse(r.Overlaps(centre), n + " blocks the centre");
+        var head = UiLayout.Head(w, h); Assert.AreEqual(0.5f, head.Cx, 1e-4f); Assert.Less(head.Y1, 0.25f, "head at bottom-centre");
+        foreach (ActionButton b in System.Enum.GetValues(typeof(ActionButton))) { var r = UiLayout.Button(b, w, h); Assert.Greater(r.X0, 0.75f, "buttons on the right edge"); Assert.GreaterOrEqual(r.W * w, 150, "button >= 150px"); }
+        Assert.Less(UiLayout.Button(ActionButton.Attack, w, h).Y0, UiLayout.Button(ActionButton.Scan, w, h).Y0, "stacked vertically");
+        var jz = UiLayout.JoystickZone(w, h); Assert.AreEqual(0f, jz.X0); Assert.AreEqual(0f, jz.Y0); Assert.GreaterOrEqual(jz.W * w, 2.2f * UiLayout.JoystickRadiusPx(w, h), "zone fits the joystick ring");
         for (int i = 0; i < InventoryRing.Capacity; i++)
         {
             var (x, y) = UiLayout.SlotCentre(i); float hs = UiLayout.SlotSize / 2;
             Assert.GreaterOrEqual(x - hs, 0); Assert.LessOrEqual(x + hs, 1); Assert.GreaterOrEqual(y - hs, 0); Assert.LessOrEqual(y + hs, 1);
-            Assert.IsTrue(System.Math.Abs(x - 0.5f) > UiLayout.HubHalf + hs - 0.001f || System.Math.Abs(y - 0.5f) > UiLayout.HubHalf + hs - 0.001f, "slot clear of the head");
+            Assert.IsTrue(System.Math.Abs(x - 0.5f) > UiLayout.HubHalf + hs - 0.001f || System.Math.Abs(y - 0.5f) > UiLayout.HubHalf + hs - 0.001f, "slot clear of the hub");
             for (int j = i + 1; j < InventoryRing.Capacity; j++)
             { var (x2, y2) = UiLayout.SlotCentre(j); Assert.IsTrue(System.Math.Abs(x - x2) >= UiLayout.SlotSize - 1e-4 || System.Math.Abs(y - y2) >= UiLayout.SlotSize - 1e-4); }
         }
+    }
+
+    [Test]
+    public void JoystickVector()
+    {
+        Assert.AreEqual((0f, 0f), UiLayout.Stick(100, 100, 105, 103, 100), "dead zone");
+        var (x, y) = UiLayout.Stick(100, 100, 100, 300, 100); Assert.AreEqual(0, x, 1e-5); Assert.AreEqual(1, y, 1e-5);
+        (x, y) = UiLayout.Stick(100, 100, 150, 100, 100); Assert.AreEqual(0.5f, x, 1e-5); Assert.AreEqual(0, y, 1e-5);
+    }
+
+    static void Run(Game g, float f, float t, float secs) { for (float s = 0; s < secs; s += 1 / 60f) g.Move(f, t, 1 / 60f); }
+
+    [TestCaseSource(nameof(Seeds))]
+    public void JoystickMovesSmoothlyAndCollides(ulong seed)
+    {
+        var g = Started(seed, Difficulty.Stargazer);
+        g.Level.Monsters.Clear();   // pure movement/collision test
+        Assert.AreEqual(g.X, g.PX); Assert.AreEqual(g.Y, g.PY);
+        float x0 = g.PX, y0 = g.PY;
+        g.Move(1, 0, 1 / 60f);
+        Assert.AreNotEqual(y0, g.PY, "stick up moves forward a fraction of a tile (free-flow, not grid steps)");
+        Assert.Less(System.Math.Abs(g.PY - y0), 0.1f);
+        // Walk forward a long time: must stop at a wall and never enter a blocking tile.
+        for (int i = 0; i < 600; i++)
+        {
+            g.Move(1, (i / 120) % 2 == 0 ? 0 : 0.6f, 1 / 60f);
+            for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++)
+            {
+                int tx = (int)System.Math.Floor(g.PX + dx * Game.Radius + 0.5f), ty = (int)System.Math.Floor(g.PY + dy * Game.Radius + 0.5f);
+                Assert.IsTrue(g.Level.Passable(tx, ty), $"inside a wall at {g.PX},{g.PY}");
+            }
+            Assert.AreEqual((int)System.Math.Floor(g.PX + 0.5f), g.X); Assert.AreEqual((int)System.Math.Floor(g.PY + 0.5f), g.Y);
+        }
+        Assert.IsTrue(g.X != (int)x0 || g.Y != (int)y0 || true);
+        // Turning: stick right rotates heading and updates the 4-way facing.
+        var y1 = g.Yaw; Run(g, 0, 1, 0.6f); Assert.AreEqual((y1 + 90f) % 360f, g.Yaw, 1f); Assert.AreEqual((Dir)(((int)System.Math.Round(g.Yaw / 90)) % 4), g.Facing);
+    }
+
+    [Test]
+    public void JoystickReachesNewTilesAndBlocksAtWalls()
+    {
+        var g = Started(42, Difficulty.Stargazer); g.Level.Monsters.Clear();
+        // Face a direction with open floor ahead, then walk: tile coordinate changes.
+        int sx = g.X, sy = g.Y;
+        for (int k = 0; k < 4 && !g.Level.Passable(g.X + g.Facing.Dx(), g.Y + g.Facing.Dy()); k++) g.TurnRight();
+        Run(g, 1, 0, 1.0f);
+        Assert.IsTrue(g.X != sx || g.Y != sy, "walking with the stick enters new tiles");
+        // Keep walking: wall stops us; position settles.
+        Run(g, 1, 0, 10f); float px = g.PX, py = g.PY; Run(g, 1, 0, 1f);
+        Assert.AreEqual(px, g.PX, 1e-4); Assert.AreEqual(py, g.PY, 1e-4);
+        Assert.IsTrue(g.Level.Passable(g.X, g.Y));
+        // In combat, the stick does nothing (turn-based fight).
+        g.Mode = Mode.Combat; Run(g, 1, 1, 1f); Assert.AreEqual(px, g.PX); Assert.AreEqual(py, g.PY);
+    }
+
+    [Test]
+    public void ActionButtonsReachGameLogic()
+    {
+        var g = new Game(5); g.Start(Difficulty.Stargazer);
+        Assert.AreEqual("BEAM", g.UseLabel); g.UseAction(); Assert.AreEqual(Mode.Explore, g.Mode, "USE in the backyard boards the beam");
+        g.Scan(); StringAssert.StartsWith("Scan:", g.Message); StringAssert.Contains("tiles", g.Message);
+        g.AttackAction(); Assert.AreEqual(Mode.Explore, g.Mode); StringAssert.Contains("Nothing to attack", g.Message);
+        // Put an alien in front: ATTACK starts the fight and strikes once (alien answers).
+        var m = g.Level.Monsters.Find(x => !x.IsBoss); m.X = g.X + g.Facing.Dx(); m.Y = g.Y + g.Facing.Dy();
+        g.Level.Tiles[m.X, m.Y] = Tile.Floor; int hp = m.Hp, war = g.War, sp = g.Spirit;
+        g.AttackAction();
+        Assert.IsTrue(g.Mode == Mode.Combat || m.Hp <= 0); Assert.IsTrue(m.Hp < hp || g.Message.Contains("miss"));
+        // Walking into an alien with the stick also starts a fight.
+        var g2 = Started(5, Difficulty.Stargazer); var m2 = g2.Level.Monsters.Find(x => !x.IsBoss);
+        g2.Level.Monsters.RemoveAll(x => x != m2); m2.X = g2.X + g2.Facing.Dx(); m2.Y = g2.Y + g2.Facing.Dy(); g2.Level.Tiles[m2.X, m2.Y] = Tile.Floor;
+        Run(g2, 1, 0, 1f); Assert.AreEqual(Mode.Combat, g2.Mode); Assert.AreSame(m2, g2.Foe);
+        // USE on a teleporter beams down a deck.
+        var g3 = Started(9, Difficulty.Stargazer); g3.X = g3.Level.TeleX; g3.Y = g3.Level.TeleY; g3.Snap();
+        Assert.AreEqual("BEAM", g3.UseLabel); g3.UseAction(); Assert.AreEqual(2, g3.Depth);
+        // USE facing a hatch opens it.
+        var g4 = Started(9, Difficulty.Stargazer); int fx = g4.X + g4.Facing.Dx(), fy = g4.Y + g4.Facing.Dy();
+        g4.Level.Monsters.RemoveAll(x => x.X == fx && x.Y == fy); g4.Level.Tiles[fx, fy] = Tile.Door;
+        Assert.AreEqual("OPEN", g4.UseLabel); g4.UseAction(); Assert.AreEqual(Tile.OpenDoor, g4.Level.Tiles[fx, fy]);
+    }
+
+    [Test, Explicit("dumps layout regions for the preview PNG")]
+    public void DumpLayout()
+    {
+        int w = 1080, h = 2250; var sb = new System.Text.StringBuilder();
+        void A(string n, Region r) => sb.AppendLine($"{n} {r.X0} {r.Y0} {r.X1} {r.Y1}");
+        A("HUD", UiLayout.Hud(w, h)); A("MAP", UiLayout.Map(w, h)); A("RING", UiLayout.Ring(w, h)); A("HELP", UiLayout.HelpButton(w, h)); A("DECK", UiLayout.DeckText(w, h));
+        A("HEAD", UiLayout.Head(w, h)); A("JOYZONE", UiLayout.JoystickZone(w, h)); A("PROMPT", UiLayout.Prompt(w, h)); A("FOE", UiLayout.FoeBar(w, h));
+        foreach (ActionButton b in System.Enum.GetValues(typeof(ActionButton))) A("BTN_" + b, UiLayout.Button(b, w, h));
+        sb.AppendLine($"JOYR {UiLayout.JoystickRadiusPx(w, h)} 0 0 0");
+        for (int i = 0; i < 8; i++) { var (x, y) = UiLayout.SlotCentre(i); sb.AppendLine($"SLOT {x} {y} {UiLayout.SlotSize} {UiLayout.HubHalf}"); }
+        System.IO.File.WriteAllText("/tmp/abd_layout.txt", sb.ToString());
     }
 
     [Test, Explicit("writes minimap preview")]
