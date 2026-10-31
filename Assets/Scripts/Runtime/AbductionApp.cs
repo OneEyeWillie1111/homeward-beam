@@ -349,7 +349,7 @@ namespace Abduction
             _lastScreen = new Vector2Int(Screen.width, Screen.height); _lastSafe = sa;
         }
 
-        /// <summary>Floating joystick: a touch (or mouse press) that STARTS in the lower-left zone grabs it; the ring appears under the thumb
+        /// <summary>Floating joystick: a touch (or mouse press) that STARTS in the bottom-centre zone (over the head) grabs it; the ring appears under the thumb
         /// and follows if you drag past its edge. Polled straight from UnityEngine.Input (legacy Input Manager, the project's active handler),
         /// so it never depends on UI raycasts. Returns (turn, forward) in -1..1.</summary>
         Vector2 PollJoystick(bool playing)
@@ -381,7 +381,7 @@ namespace Abduction
             if (_joyId == NoFinger)
             {
                 // Faint resting hint in the zone so players know where to put their thumb.
-                var rest = new Vector2(_joyZone.Cx * sa.width, Mathf.Min(_joyZone.Y1 * 0.45f * sa.height, _joyR * 1.6f));
+                var (rx, ry) = UiLayout.JoystickRestPx(sa.width, sa.height); var rest = new Vector2(rx, ry);
                 _joyBase.anchoredPosition = _joyKnob.anchoredPosition = rest / k;
                 baseImg.color = new Color(1, 1, 1, playing ? 0.12f : 0); knobImg.color = new Color(0.85f, 0.97f, 1f, playing ? 0.12f : 0);
                 return Vector2.zero;

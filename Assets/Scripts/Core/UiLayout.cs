@@ -2,7 +2,7 @@ namespace Abduction.Core
 {
     /// <summary>Normalised screen regions (0..1 anchors inside Screen.safeArea, origin bottom-left).
     /// Portrait-locked, full-screen 3D view with minimal overlays: HUD top, map top-left, ring top-right corner,
-    /// head bottom-centre, floating joystick zone lower-left, round action buttons stacked on the right edge.
+    /// head bottom-centre, big floating joystick bottom-centre over the head, round action buttons stacked on the right edge.
     /// Kept in Core so the layout is unit-tested for real phone sizes (e.g. 1080x2340) without Unity.</summary>
     public struct Region
     {
@@ -39,12 +39,14 @@ namespace Abduction.Core
             float d = ButtonPx(w, h), m = M(w, h) * 0.03f, gap = M(w, h) * 0.025f;
             return Sq(w - m - d, m + (int)b * (d + gap), d, w, h);
         }
-        /// <summary>Where a thumb press starts the floating joystick: lower-left, left of the head.</summary>
-        public static Region JoystickZone(float w, float h) { var head = Head(w, h); return new Region(0, 0, head.X0 - 0.01f, 0.40f); }
-        /// <summary>Joystick ring radius in px.</summary>
-        public static float JoystickRadiusPx(float w, float h) => M(w, h) * 0.13f;
+        /// <summary>Where a thumb press starts the floating joystick: bottom-centre, centred on the head's x (overlays the head).</summary>
+        public static Region JoystickZone(float w, float h) { var head = Head(w, h); float hw = 1.15f * JoystickRadiusPx(w, h) / w; return new Region(head.Cx - hw, 0, head.Cx + hw, 0.30f); }
+        /// <summary>Joystick ring radius in px (big: ~1.85x the first version).</summary>
+        public static float JoystickRadiusPx(float w, float h) => M(w, h) * 0.24f;
+        /// <summary>Resting joystick centre in px: on the head's x, at the head's centre y (raised so the ring stays on screen).</summary>
+        public static (float x, float y) JoystickRestPx(float w, float h) { var head = Head(w, h); float r = JoystickRadiusPx(w, h); return (head.Cx * w, System.Math.Max(head.Cy * h, r * 1.05f)); }
         /// <summary>Prompt banner and enemy bar in the lower third, between the joystick zone and the buttons.</summary>
-        public static Region Prompt(float w, float h) { var bx = Button(ActionButton.Alt, w, h); return new Region(0.04f, 0.42f, bx.X0 - 0.02f, 0.42f + M(w, h) * 0.09f / h); }
+        public static Region Prompt(float w, float h) { var bx = Button(ActionButton.Alt, w, h); float y0 = JoystickZone(w, h).Y1 + JoystickRadiusPx(w, h) / h + 0.01f; return new Region(0.04f, y0, bx.X0 - 0.02f, y0 + M(w, h) * 0.09f / h); }
         public static Region FoeBar(float w, float h) { var p = Prompt(w, h); return new Region(p.X0, p.Y1 + 0.006f, p.X1, p.Y1 + 0.006f + M(w, h) * 0.06f / h); }
 
         public const float SlotRadius = 0.37f, SlotSize = 0.25f, HubHalf = 0.12f;

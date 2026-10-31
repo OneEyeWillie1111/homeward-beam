@@ -249,8 +249,20 @@ public class CoreTests
         };
         foreach (ActionButton b in System.Enum.GetValues(typeof(ActionButton))) named.Add(("btn" + b, UiLayout.Button(b, w, h)));
         foreach (var (n, r) in named) { Assert.GreaterOrEqual(r.X0, 0, n); Assert.GreaterOrEqual(r.Y0, 0, n); Assert.LessOrEqual(r.X1, 1, n); Assert.LessOrEqual(r.Y1, 1, n); Assert.Greater(r.W, 0, n); Assert.Greater(r.H, 0, n); }
-        for (int i = 0; i < named.Count; i++) for (int j = i + 1; j < named.Count; j++)
-            Assert.IsFalse(named[i].r.Overlaps(named[j].r), $"{named[i].n} overlaps {named[j].n} at {w}x{h}");
+        for (int i = 0; i < named.Count; i++)
+            for (int j = i + 1; j < named.Count; j++)
+            {
+                if ((named[i].n == "head" && named[j].n == "joystick") || (named[i].n == "joystick" && named[j].n == "head")) continue;   // joystick overlays the head by design
+                Assert.IsFalse(named[i].r.Overlaps(named[j].r), $"{named[i].n} overlaps {named[j].n} at {w}x{h}");
+            }
+        // Joystick: centred on the head, big, and its drawn ring (anywhere a drag can put it) stays below the prompt and clear of the buttons.
+        float jr = UiLayout.JoystickRadiusPx(w, h);
+        Assert.GreaterOrEqual(jr, 0.22f * w, "joystick is big");
+        var jzh = UiLayout.JoystickZone(w, h); Assert.AreEqual(UiLayout.Head(w, h).Cx, jzh.Cx, 1e-4f, "joystick centred on the head");
+        var (rx, ry) = UiLayout.JoystickRestPx(w, h); Assert.AreEqual(0.5f * w, rx, 0.5f); Assert.GreaterOrEqual(ry - jr, 0, "rest ring on screen");
+        var reach = new Region(jzh.X0, 0, jzh.X1, jzh.Y1 + jr / h);
+        Assert.IsFalse(reach.Overlaps(UiLayout.Prompt(w, h)), "joystick ring below the prompt");
+        foreach (ActionButton b in System.Enum.GetValues(typeof(ActionButton))) Assert.IsFalse(jzh.Overlaps(UiLayout.Button(b, w, h)), "joystick zone clear of buttons");
         var ring = UiLayout.Ring(w, h); var map = UiLayout.Map(w, h);
         Assert.AreEqual(ring.W * w, ring.H * h, 0.5f, "ring panel is square"); Assert.Greater(ring.X0, 0.5f, "ring tucked in the right corner"); Assert.Greater(ring.Y0, 0.5f, "ring in the upper corner");
         Assert.GreaterOrEqual(ring.W * w * UiLayout.SlotSize, 90, "ring slots big enough to tap");
@@ -261,7 +273,7 @@ public class CoreTests
         var head = UiLayout.Head(w, h); Assert.AreEqual(0.5f, head.Cx, 1e-4f); Assert.Less(head.Y1, 0.25f, "head at bottom-centre");
         foreach (ActionButton b in System.Enum.GetValues(typeof(ActionButton))) { var r = UiLayout.Button(b, w, h); Assert.Greater(r.X0, 0.75f, "buttons on the right edge"); Assert.GreaterOrEqual(r.W * w, 150, "button >= 150px"); }
         Assert.Less(UiLayout.Button(ActionButton.Attack, w, h).Y0, UiLayout.Button(ActionButton.Scan, w, h).Y0, "stacked vertically");
-        var jz = UiLayout.JoystickZone(w, h); Assert.AreEqual(0f, jz.X0); Assert.AreEqual(0f, jz.Y0); Assert.GreaterOrEqual(jz.W * w, 2.2f * UiLayout.JoystickRadiusPx(w, h), "zone fits the joystick ring");
+        var jz = UiLayout.JoystickZone(w, h); Assert.AreEqual(0f, jz.Y0); Assert.GreaterOrEqual(jz.W * w, 2.2f * UiLayout.JoystickRadiusPx(w, h), "zone fits the joystick ring");
         for (int i = 0; i < InventoryRing.Capacity; i++)
         {
             var (x, y) = UiLayout.SlotCentre(i); float hs = UiLayout.SlotSize / 2;
