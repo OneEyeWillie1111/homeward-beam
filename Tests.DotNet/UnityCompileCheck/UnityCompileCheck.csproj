@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Compile-only check of ALL project C# (runtime + editor) against the installed Unity 6000.3.27f1 reference assemblies. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <UnityEditorDir Condition="'$(UnityEditorDir)'==''">$(HOME)/Unity/Hub/Editor/6000.3.27f1/Editor</UnityEditorDir>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Assets/**/*.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="$(UnityEditorDir)/Data/Managed/UnityEngine/*.dll" Private="false" />
+    <Reference Include="$(UnityEditorDir)/Data/Resources/PackageManager/ProjectTemplates/libcache/com.unity.template.3d-cross-platform-17.0.14/ScriptAssemblies/UnityEngine.UI.dll" Private="false" />
+  </ItemGroup>
+</Project>
