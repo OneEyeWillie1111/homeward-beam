@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace HomewardBeam.Core
+namespace Abduction.Core
 {
     /// <summary>One procedurally generated, seeded ship deck: chambers joined by corridors, hatches (doors) at chamber mouths, a teleporter pad down to the next deck.</summary>
     public sealed class Level
@@ -23,9 +23,14 @@ namespace HomewardBeam.Core
 
         public static ulong SeedFor(ulong runSeed, int depth) => runSeed * 1000003UL + (ulong)depth * 7919UL;
 
-        public Level(int depth, ulong runSeed, Difficulty diff)
+        public readonly int DeckCount;
+        public bool IsLast => Depth == DeckCount;
+
+        public Level(int depth, ulong runSeed, Difficulty diff) : this(depth, runSeed, diff, GameData.DeckCount(diff)) { }
+
+        public Level(int depth, ulong runSeed, Difficulty diff, int deckCount)
         {
-            Depth = depth;
+            Depth = depth; DeckCount = deckCount;
             var rng = new Rng(SeedFor(runSeed, depth));
             for (int x = 0; x < Size; x++) for (int y = 0; y < Size; y++) Tiles[x, y] = Tile.Wall;
 
@@ -53,7 +58,7 @@ namespace HomewardBeam.Core
             var farRoom = Rooms[far];
 
             int scale = GameData.MonsterScale(diff);
-            if (depth == GameData.LevelCount)
+            if (depth == deckCount)
             {
                 var b = GameData.Boss;
                 int hp = b.BaseHp * scale / 100;
@@ -64,7 +69,7 @@ namespace HomewardBeam.Core
             else { TeleX = farRoom.Cx; TeleY = farRoom.Cy; Tiles[TeleX, TeleY] = Tile.Teleporter; }
 
             // Monster rooms.
-            int maxTier = System.Math.Min(5, (depth - 1) * 6 / GameData.LevelCount);
+            int maxTier = System.Math.Min(5, (depth - 1) * 6 / System.Math.Max(1, deckCount));
             for (int i = 1; i < Rooms.Count; i++)
             {
                 if (!rng.Chance(55)) continue;
@@ -73,9 +78,9 @@ namespace HomewardBeam.Core
                 if (Tiles[x, y] != Tile.Floor || MonsterAt(x, y) != null) continue;
                 int tier = rng.Range(System.Math.Max(0, maxTier - 2), maxTier + 1);
                 var kind = GameData.Monsters[tier * 2 + rng.Range(0, 2)];
-                int depthBonus = depth;
+                int depthBonus = depth * 10 / deckCount;
                 int mhp = System.Math.Max(2, (kind.BaseHp + depthBonus) * scale / 100);
-                int atk = System.Math.Max(1, (kind.BaseAtk + depth / 4) * scale / 100);
+                int atk = System.Math.Max(1, (kind.BaseAtk + depth * 10 / deckCount / 4) * scale / 100);
                 Monsters.Add(new Monster { Kind = kind, Hp = mhp, MaxHp = mhp, Atk = atk, X = x, Y = y });
             }
 
@@ -86,7 +91,7 @@ namespace HomewardBeam.Core
                 var r = Rooms[rng.Range(0, Rooms.Count)];
                 int x = rng.Range(r.X, r.X + r.W), y = rng.Range(r.Y, r.Y + r.H);
                 if (Tiles[x, y] != Tile.Floor || (x == StartX && y == StartY) || FloorItems.ContainsKey(Key(x, y))) continue;
-                FloorItems[Key(x, y)] = ItemGen.Random(rng, depth);
+                FloorItems[Key(x, y)] = ItemGen.Random(rng, depth * 10 / deckCount);
             }
             // A locked supply locker and its access card on roughly every third deck.
             if (rng.Chance(45) && Rooms.Count > 2)
@@ -95,7 +100,7 @@ namespace HomewardBeam.Core
                 int cx = cr.X, cy = cr.Y;
                 if (Tiles[cx, cy] == Tile.Floor && MonsterAt(cx, cy) == null && !FloorItems.ContainsKey(Key(cx, cy)))
                 {
-                    Chests.Add(new Chest { X = cx, Y = cy, Loot = ItemGen.Treasure(rng, depth) });
+                    Chests.Add(new Chest { X = cx, Y = cy, Loot = ItemGen.Treasure(rng, depth * 10 / deckCount) });
                     var kr = Rooms[rng.Range(0, Rooms.Count)];
                     int kx = kr.X + kr.W - 1, ky = kr.Y + kr.H - 1;
                     if (Tiles[kx, ky] == Tile.Floor && !(kx == cx && ky == cy)) FloorItems[Key(kx, ky)] = new Item(ItemKind.Key, "Access Card", 1);

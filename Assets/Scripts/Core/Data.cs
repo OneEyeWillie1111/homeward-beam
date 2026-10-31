@@ -1,10 +1,12 @@
 using System.Collections.Generic;
 
-namespace HomewardBeam.Core
+namespace Abduction.Core
 {
     public enum Tile { Wall, Floor, Door, OpenDoor, Teleporter, HomeMachine }
     public enum Dir { North, East, South, West }
     public enum Difficulty { Stargazer, Abductee, Specimen, Doomed }
+    /// <summary>Playable species. Everyone starts in their own backyard.</summary>
+    public enum Species { Human, Cat, Dog }
     public enum ItemKind { Weapon, Armor, Magic, Food, Key }
     /// <summary>War aliens strike the body (War health); Spirit aliens attack the mind (Spiritual health).</summary>
     public enum MonsterNature { War, Spirit }
@@ -26,8 +28,15 @@ namespace HomewardBeam.Core
 
     public static class GameData
     {
-        public const string GameName = "Homeward Beam";
-        public const int LevelCount = 10;
+        public const string GameName = "Abduction";
+        public const string Intro = "You were taken from your backyard. Fight down the decks of the ship to the teleportation machine home.";
+        /// <summary>Most decks any role faces (Doomed).</summary>
+        public const int MaxDecks = 50;
+        /// <summary>Number of decks per role: Stargazer 10, Abductee 20, Specimen 35, Doomed 50. The boss waits on the last one.</summary>
+        public static int DeckCount(Difficulty d) => d switch { Difficulty.Stargazer => 10, Difficulty.Abductee => 20, Difficulty.Specimen => 35, _ => 50 };
+        public static readonly string[] SpeciesNames = { "Human", "Cat", "Dog" };
+        /// <summary>Species bonus to starting War / Spirit: humans balanced, cats sharper minds, dogs tougher bodies.</summary>
+        public static (int war, int spirit) SpeciesBonus(Species s) => s switch { Species.Cat => (-4, 6), Species.Dog => (6, -4), _ => (0, 0) };
         public const int MaxStat = 99;
 
         /// <summary>Original alien types, weakest tier first. Grays are tier 4 (second strongest); Saurians (the Serpent Lords, lizard people) are tier 5, the strongest.</summary>
@@ -47,7 +56,7 @@ namespace HomewardBeam.Core
             new MonsterKind("Saurian Brood-Mother",    MonsterNature.Spirit,25, 8, 5, 0xFF556B2F),  // Serpent Lord caste (lizard people)
         };
 
-        /// <summary>Original final boss guarding the teleportation machine home on level 10.</summary>
+        /// <summary>Original final boss guarding the teleportation machine home on the last deck.</summary>
         public static readonly MonsterKind Boss = new MonsterKind("Ixmorrhan, the Coiled Sovereign", MonsterNature.War, 90, 11, 9, 0xFF1F6F4A);
 
         public static readonly string[] WeaponNames = { "Pipe Wrench", "Shock Baton", "Ion Pistol", "Plasma Cutter", "Graviton Lance", "Quark Rifle" };

@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace HomewardBeam.Core
+namespace Abduction.Core
 {
     /// <summary>Ring-shaped inventory: a fixed circle of slots with one "selected" item; Next/Prev rotate around the ring and wrap.</summary>
     public sealed class InventoryRing

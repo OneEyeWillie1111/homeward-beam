@@ -1,6 +1,6 @@
 using System;
 
-namespace HomewardBeam.Core
+namespace Abduction.Core
 {
     /// <summary>Procedurally synthesised mono sound effects (no audio files needed). Samples are in [-1, 1].</summary>
     public static class SoundSynth

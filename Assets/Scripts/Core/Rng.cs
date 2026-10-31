@@ -1,4 +1,4 @@
-namespace HomewardBeam.Core
+namespace Abduction.Core
 {
     /// <summary>Small deterministic xorshift RNG so every level is reproducible from its seed on every platform.</summary>
     public sealed class Rng

@@ -1,15 +1,20 @@
 using System;
 
-namespace HomewardBeam.Core
+namespace Abduction.Core
 {
-    public enum Mode { Title, Explore, Combat, Victory }
+    public enum Mode { Title, Backyard, Explore, Combat, Victory }
     public enum Sfx { Step, Bump, Door, Hit, Miss, Hurt, Pickup, Stairs, Eat, Magic, Death, Victory, Select }
 
     /// <summary>All game rules. Pure C# with no UnityEngine dependency, so it is unit-tested with plain .NET.</summary>
     public sealed class Game
     {
         public Mode Mode = Mode.Title;
-        public Difficulty Difficulty;
+        public Difficulty Difficulty; public Species Species;
+        public int DeckCount => GameData.DeckCount(Difficulty);
+        /// <summary>Weapon or psionic item used by ATTACK, and the armor worn. Shown highlighted on the ring.</summary>
+        public Item EquippedWeapon, EquippedArmor;
+        /// <summary>Auto-map: tiles the player has seen on the current deck.</summary>
+        public bool[,] Seen = new bool[Level.Size, Level.Size];
         public ulong RunSeed;
         public Level Level;
         public int Depth => Level?.Depth ?? 0;
@@ -27,14 +32,23 @@ namespace HomewardBeam.Core
         void Play(Sfx s) => OnSound?.Invoke(s);
         static int Clamp(int v) => v < 0 ? 0 : v > GameData.MaxStat ? GameData.MaxStat : v;
 
-        public void Start(Difficulty d)
+        /// <summary>Start a run: you begin in your backyard; BEAM (the abduction beam) takes you to deck 1.</summary>
+        public void Start(Difficulty d, Species s = Species.Human)
         {
-            Difficulty = d; Reincarnations = 0; Kills = 0;
-            WarMax = War = GameData.StartWar(d); SpiritMax = Spirit = GameData.StartSpirit(d);
+            Difficulty = d; Species = s; Reincarnations = 0; Kills = 0; DeepestDepth = 0; Level = null; Foe = null;
+            var (bw, bs) = GameData.SpeciesBonus(s);
+            WarMax = War = Clamp(GameData.StartWar(d) + bw); SpiritMax = Spirit = Clamp(GameData.StartSpirit(d) + bs);
             GiveStarterKit();
-            EnterLevel(1);
-            Message = $"Welcome to {GameData.GameName}. You were abducted. Reach the teleporter on each of 10 decks and take the machine home.";
-            Mode = Mode.Explore;
+            Mode = Mode.Backyard;
+            Message = "A quiet night in the backyard... then a blinding light. Tap BEAM.";
+        }
+
+        /// <summary>The abduction beam: leave the backyard for deck 1.</summary>
+        public void Abduct()
+        {
+            if (Mode != Mode.Backyard) return;
+            Mode = Mode.Explore; EnterLevel(1);
+            Message = GameData.Intro; Play(Sfx.Stairs);
         }
 
         void GiveStarterKit()
@@ -43,12 +57,22 @@ namespace HomewardBeam.Core
             Ring.Add(new Item(ItemKind.Weapon, GameData.WeaponNames[0], 3));
             Ring.Add(new Item(ItemKind.Magic, GameData.MagicNames[0], 3));
             Ring.Add(new Item(ItemKind.Food, GameData.FoodNames[0], 8));
+            EquippedWeapon = Ring.Items[0]; EquippedArmor = null;
+        }
+
+        /// <summary>Keep equipment valid: weapon must still be in the ring; armor is the best armor carried.</summary>
+        void RefreshEquipment()
+        {
+            bool has = false; foreach (var i in Ring.Items) if (i == EquippedWeapon) has = true;
+            if (!has) EquippedWeapon = Ring.First(ItemKind.Weapon) ?? Ring.First(ItemKind.Magic);
+            EquippedArmor = Ring.Best(ItemKind.Armor);
         }
 
         public void EnterLevel(int depth)
         {
             Level = new Level(depth, RunSeed, Difficulty);
             X = Level.StartX; Y = Level.StartY; Facing = Dir.North; Foe = null;
+            Seen = new bool[Level.Size, Level.Size]; Reveal();
             if (depth > DeepestDepth) DeepestDepth = depth;
             if (Mode == Mode.Combat) Mode = Mode.Explore;
         }
@@ -70,10 +94,10 @@ namespace HomewardBeam.Core
             if (chest != null && !chest.Opened) { Message = "A locked supply locker. Face it and tap OPEN."; Play(Sfx.Bump); return; }
             var m = Level.MonsterAt(nx, ny);
             if (m != null) { BeginCombat(m); return; }
-            _fromX = X; _fromY = Y; X = nx; Y = ny; Message = ""; Play(Sfx.Step);
+            _fromX = X; _fromY = Y; X = nx; Y = ny; Message = ""; Play(Sfx.Step); Reveal();
             if (Level.FloorItems.TryGetValue(Level.Key(X, Y), out var it))
             {
-                if (Ring.Add(it)) { Level.FloorItems.Remove(Level.Key(X, Y)); Message = $"Picked up {it}."; Play(Sfx.Pickup); }
+                if (Ring.Add(it)) { Level.FloorItems.Remove(Level.Key(X, Y)); Message = $"Picked up {it}."; Play(Sfx.Pickup); RefreshEquipment(); }
                 else Message = $"{it.Name} lies here, but your ring is full. Drop something.";
             }
             if (Level.At(X, Y) == Tile.Teleporter) Message = "A teleporter pad hums here. Tap BEAM to go down a deck.";
@@ -88,14 +112,14 @@ namespace HomewardBeam.Core
         {
             if (Mode != Mode.Explore) return;
             int fx = X + Facing.Dx(), fy = Y + Facing.Dy();
-            if (Level.At(fx, fy) == Tile.Door) { Level.Tiles[fx, fy] = Tile.OpenDoor; Message = "The door creaks open."; Play(Sfx.Door); return; }
+            if (Level.At(fx, fy) == Tile.Door) { Level.Tiles[fx, fy] = Tile.OpenDoor; Message = "The hatch hisses open."; Play(Sfx.Door); Reveal(); return; }
             var c = Level.ChestAt(fx, fy);
             if (c != null && !c.Opened)
             {
                 var key = Ring.First(ItemKind.Key);
                 if (key == null) { Message = "The locker is sealed. Find an access card."; Play(Sfx.Bump); return; }
                 Ring.Remove(key);
-                c.Opened = true; Ring.Add(c.Loot); Message = $"Unlocked the locker: {c.Loot}!"; Play(Sfx.Pickup);
+                c.Opened = true; Ring.Add(c.Loot); RefreshEquipment(); Message = $"Unlocked the locker: {c.Loot}!"; Play(Sfx.Pickup);
                 Level.Chests.Remove(c);
                 return;
             }
@@ -104,19 +128,66 @@ namespace HomewardBeam.Core
 
         public bool Descend()
         {
+            if (Mode == Mode.Backyard) { Abduct(); return true; }
             if (Mode != Mode.Explore) return false;
             var t = Level.At(X, Y);
             if (t == Tile.HomeMachine) { Mode = Mode.Victory; Message = "The machine flares. You wake up in your own bed. You're home!"; Play(Sfx.Victory); return true; }
             if (t != Tile.Teleporter) { Message = "No teleporter here."; return false; }
             EnterLevel(Depth + 1);
-            Message = $"Deck {Depth} of {GameData.LevelCount}." + (Depth == GameData.LevelCount ? $" {GameData.Boss.Name} guards the machine home." : "");
+            Message = $"Deck {Depth} of {DeckCount}." + (Depth == DeckCount ? $" {GameData.Boss.Name} guards the machine home." : "");
             Play(Sfx.Stairs); return true;
         }
 
-        public void DropCurrent() { if (Mode != Mode.Explore || Ring.Current == null) return; Message = $"Dropped {Ring.Current.Name}."; Ring.RemoveCurrent(); Play(Sfx.Select); }
-        public void RingNext() { Ring.Next(); Play(Sfx.Select); }
-        public bool RingSelect(int i) { if (!Ring.Select(i)) return false; Message = $"Holding {Ring.Current}."; Play(Sfx.Select); return true; }
-        public void RingPrev() { Ring.Prev(); Play(Sfx.Select); }
+        public void DropCurrent() { if (Mode != Mode.Explore || Ring.Current == null) return; Message = $"Dropped {Ring.Current.Name}."; Ring.RemoveCurrent(); RefreshEquipment(); Play(Sfx.Select); }
+        public bool RingSelect(int i) { if (!Ring.Select(i)) return false; OnSelected(); return true; }
+        public void RingPrev() { Ring.Prev(); OnSelected(); }
+        public void RingNext() { Ring.Next(); OnSelected(); }
+        /// <summary>Selecting a weapon or psionic item equips it; other items are just held, ready to USE.</summary>
+        void OnSelected()
+        {
+            var c = Ring.Current; Play(Sfx.Select); if (c == null) return;
+            if (c.Kind == ItemKind.Weapon || c.Kind == ItemKind.Magic) { EquippedWeapon = c; Message = $"Equipped {c}."; }
+            else Message = $"Holding {c}." + (c.Kind == ItemKind.Food ? " Tap USE to eat." : c.Kind == ItemKind.Key ? " Face a locker and tap OPEN." : " Armor is worn automatically.");
+        }
+
+        /// <summary>Reveal the auto-map: everything within 1 tile, plus straight lines of sight in all four directions.</summary>
+        void Reveal()
+        {
+            if (Level == null) return;
+            for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) if (Level.InBounds(X + dx, Y + dy)) Seen[X + dx, Y + dy] = true;
+            for (int k = 0; k < 4; k++)
+                for (int i = 1; i < Level.Size; i++)
+                {
+                    int x = X + ((Dir)k).Dx() * i, y = Y + ((Dir)k).Dy() * i; if (!Level.InBounds(x, y)) break;
+                    for (int s = -1; s <= 1; s++) { int sx = x + (k % 2 == 0 ? s : 0), sy = y + (k % 2 == 1 ? s : 0); if (Level.InBounds(sx, sy)) Seen[sx, sy] = true; }
+                    if (!Level.Passable(x, y)) break;
+                }
+        }
+
+        /// <summary>Short, always-visible hint telling the player what they can do right now.</summary>
+        public string Prompt
+        {
+            get
+            {
+                switch (Mode)
+                {
+                    case Mode.Title: return "Choose your species and role, then tap START.";
+                    case Mode.Backyard: return "A light in the sky! Tap BEAM to be taken.";
+                    case Mode.Victory: return "You made it home! Tap NEW RUN to play again.";
+                    case Mode.Combat: return Foe == null ? "" : $"{Foe.Name}! ATTACK with your {EquippedWeapon?.Name ?? "fists"}, USE an item, or FLEE.";
+                }
+                var t = Level.At(X, Y);
+                if (t == Tile.Teleporter) return "Teleporter pad: tap BEAM to go down a deck.";
+                if (t == Tile.HomeMachine) return "The machine home: tap BEAM!";
+                int fx = X + Facing.Dx(), fy = Y + Facing.Dy();
+                if (Level.At(fx, fy) == Tile.Door) return "Hatch ahead: tap OPEN.";
+                var c = Level.ChestAt(fx, fy);
+                if (c != null) return Ring.First(ItemKind.Key) != null ? "Supply locker: tap OPEN to use your access card." : "Locked supply locker: find an access card.";
+                if (Level.MonsterAt(fx, fy) != null) return "An alien blocks the way: step FORWARD to fight.";
+                if (War < WarMax / 3 && Ring.First(ItemKind.Food) != null) return "Low War health: select food on the ring and tap USE.";
+                return Depth == DeckCount ? "Final deck: find the machine home." : "Explore with FORWARD / TURN. Find the glowing teleporter.";
+            }
+        }
 
         // ---------- Combat ----------
         public void BeginCombat(Monster m)
@@ -128,13 +199,13 @@ namespace HomewardBeam.Core
             Play(Sfx.Hurt);
         }
 
-        int ArmorValue() => Ring.Best(ItemKind.Armor)?.Power ?? 0;
+        int ArmorValue() => EquippedArmor?.Power ?? 0;
 
         /// <summary>Attack with the selected ring item: weapons hurt War creatures fully, magic hurts Spirit creatures fully; the wrong kind does half.</summary>
         public void Attack()
         {
             if (Mode != Mode.Combat || Foe == null) return;
-            var it = Ring.Current;
+            var it = EquippedWeapon;
             int power; bool magic = false;
             if (it != null && it.Kind == ItemKind.Weapon) power = it.Power;
             else if (it != null && it.Kind == ItemKind.Magic)
@@ -163,7 +234,7 @@ namespace HomewardBeam.Core
             if (it.Kind == ItemKind.Food)
             {
                 War = Clamp(Math.Min(WarMax, War + it.Power)); Spirit = Clamp(Math.Min(SpiritMax, Spirit + it.Power / 2));
-                Ring.RemoveCurrent(); Message = $"You eat the {it.Name}."; Play(Sfx.Eat);
+                Ring.RemoveCurrent(); RefreshEquipment(); Message = $"You eat the {it.Name}."; Play(Sfx.Eat);
                 if (Mode == Mode.Combat) MonsterTurn();
                 return true;
             }

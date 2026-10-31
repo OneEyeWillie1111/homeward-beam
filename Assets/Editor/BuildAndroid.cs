@@ -5,7 +5,7 @@ using UnityEditor.Build;
 using UnityEngine;
 
 /// <summary>
-/// Android player settings for Homeward Beam. The same values are already committed in ProjectSettings/ProjectSettings.asset;
+/// Android player settings for Abduction. The same values are already committed in ProjectSettings/ProjectSettings.asset;
 /// this re-applies them before any build (including Unity Build Automation, via the pre-export method
 /// "BuildAndroid.PreExport") so a cloud build never depends on manual editor setup.
 /// Local batch build:  Unity -batchmode -quit -projectPath . -executeMethod BuildAndroid.Build -logFile -
@@ -15,18 +15,18 @@ public static class BuildAndroid
 {
     public const string Version = "1.0.0";
     public const int VersionCode = 1;
-    public const string PackageId = "com.krabbiergames.homewardbeam";
+    public const string PackageId = "com.krabbiergames.abduction";
     public const int TargetApi = 36;
     const string ScenePath = "Assets/Scenes/Main.unity";
 
     static string Env(string k) { var v = Environment.GetEnvironmentVariable(k); return string.IsNullOrEmpty(v) ? null : v; }
 
-    [MenuItem("Homeward Beam/Apply Android Settings")]
+    [MenuItem("Abduction/Apply Android Settings")]
     public static void ApplySettings()
     {
         var android = NamedBuildTarget.Android;
         PlayerSettings.companyName = "KrabbierGames";
-        PlayerSettings.productName = "Homeward Beam";
+        PlayerSettings.productName = "Abduction";
         PlayerSettings.SetApplicationIdentifier(android, PackageId);
         PlayerSettings.bundleVersion = Version;
         PlayerSettings.Android.bundleVersionCode = VersionCode;
@@ -50,7 +50,7 @@ public static class BuildAndroid
             PlayerSettings.Android.useCustomKeystore = true;
             PlayerSettings.Android.keystoreName = ks;
             PlayerSettings.Android.keystorePass = Env("HB_KS_PASS");
-            PlayerSettings.Android.keyaliasName = Env("HB_KEY_ALIAS") ?? "homewardbeam";
+            PlayerSettings.Android.keyaliasName = Env("HB_KEY_ALIAS") ?? "abduction";
             PlayerSettings.Android.keyaliasPass = Env("HB_KEY_PASS") ?? Env("HB_KS_PASS");
         }
     }
@@ -61,7 +61,7 @@ public static class BuildAndroid
     public static void Build()
     {
         ApplySettings();
-        var outPath = Env("HB_APK_OUT") ?? "Build/HomewardBeam-arm64.apk";
+        var outPath = Env("HB_APK_OUT") ?? "Build/Abduction-arm64.apk";
         Directory.CreateDirectory(Path.GetDirectoryName(outPath));
         var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions
         {
