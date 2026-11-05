@@ -27,29 +27,28 @@
 On every deck, find the glowing **teleporter pad**, stand on it and tap **BEAM** to go down. On the **last deck**, **Ixmorrhan, the Coiled Sovereign** stands on the **teleportation machine home**. Defeat him, step onto the machine and tap **BEAM**.
 
 ## Screen
-- **The view:** a third-person look over your shoulder at the **back of your character's head**, fixed at the bottom centre (cats show pointed ears, dogs floppy ears). It stays perfectly still: no bobbing.
-- **Ring inventory:** your 8 items orbit your head. Tap a slot (or use **< RING** and **RING >**) to hold that item.
+- **The view:** a third-person look over your shoulder at the **back of your character's head**, fixed at the bottom centre (cats show pointed ears, dogs floppy ears). It stays perfectly still: no bobbing. Portrait-locked and fullscreen on phone.
+- **Ring inventory (top-right corner):** your 8 items sit in a Tarmin-style corner ring. Tap a slot to hold that item.
   - A **red ring** marks your equipped weapon, which ATTACK uses. Selecting a weapon or psionic item equips it.
   - A **blue ring** marks the armor you're wearing. Your best armor is worn automatically.
   - **Gold** marks the item you're holding, ready to USE.
-- **Corner map (top-left):** fills in as you explore. The arrow is you. Cyan is a teleporter, gold is the machine home, orange is a hatch and red dots are aliens.
-- **Prompt banner:** always tells you what you can do right now, for example "Hatch ahead: tap OPEN." or "Teleporter pad: tap BEAM to go down a deck."
-- **HELP (top-right):** opens a paged guide covering the goal, moving, fighting, health, the ring and the aliens.
+- **Corner map (top-left):** fills in as you explore. The arrow is you. Cyan is a teleporter, gold is the machine home, orange is a hatch and red dots are aliens. Tap it (or MAP) for a zoomed map centred on you.
+- **MAP / WEAPONS / UFO:** small buttons under the corner map. WEAPONS is the full collection (11 weapons, lit vs grey). UFO is the mothership side cutaway with Earth below, cleared decks lit, and a YOU marker.
+- **Stat card:** under the bars, shows your equipped weapon icon/name plus ATK and DEF. HELP includes a LARGE TEXT toggle.
+- **Prompt banner:** always tells you what you can do right now.
 - **Bars:** **WAR** (red) is your body and **SPIRIT** (blue) is your mind; both run from 0 to 99. An enemy health bar appears during fights.
 
 ## Controls
-| Button | Action |
+| Control | Action |
 |---|---|
-| FORWARD / BACK | Step one tile (smooth glide) |
-| TURN L / TURN R | Turn 90° (smooth turn) |
-| OPEN | Open the hatch or supply locker in front of you |
-| < RING / RING >, or tap a slot | Choose an item |
-| USE | Use the held item (food heals; outside fights, psionics heal) |
-| BEAM | Get abducted from the backyard, use a teleporter, or use the machine home |
-| ATTACK / FLEE | Shown during fights. You can't flee from the boss. |
-| DROP | Drop the held item |
+| Floating joystick (bottom-centre, over your head) | Thumb-drag to walk, back up, and turn. You slide along walls. |
+| ATTACK | Hit the alien in front of you (or start a fight). |
+| USE | Open the hatch or locker ahead, beam on a teleporter or the machine home, or use the held item (food heals). |
+| SCAN | Map nearby tiles and point to the teleporter; in a fight, read the foe for free. |
+| DROP / FLEE | Drop the held item, or flee a non-boss fight. |
+| Tap a ring slot | Hold that item (equips weapons/psionics). |
 
-The keyboard also works in the editor: WASD or the arrow keys to move, Space to open or attack, F to flee, E to use, Q/R to cycle the ring, B to beam and H for help.
+The keyboard also works in the editor: WASD or the arrow keys to move, Space to open or attack, F to flee, E to use, Q to scan, R to cycle the ring, B to beam and H for help.
 
 ## Rules
 - **Fights:** walking into an alien starts a turn-based fight, and the alien strikes back after each of your actions.
@@ -85,7 +84,7 @@ The keyboard also works in the editor: WASD or the arrow keys to move, Space to 
   - Product name: "Abduction"
   - IL2CPP, ARM64 only
   - Minimum API **25** (Unity 6000.3 marks API 24 as obsolete)
-  - Auto-rotation
+  - Portrait locked (fullscreen)
 - `Assets/Editor/BuildAndroid.cs` re-applies all of these settings. `BuildAndroid.PreExport` can be used as the Build Automation pre-export method.
 - **Material templates:** `Assets/Resources/*.mat` are the Standard-shader templates, so the cloud build compiles only the shader variants the game needs.
 - **Tests:** the rules, the map, the help text and the layout live in `Assets/Scripts/Core`, which is plain C#. `Tests.DotNet` runs them with `dotnet test`. `Tests.DotNet/UnityCompileCheck` compiles all of the game's code against the Unity 6000.3.27f1 libraries without needing a Unity license.
